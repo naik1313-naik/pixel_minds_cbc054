@@ -1,0 +1,36 @@
+node_modules
+.next
+out
+build
+data/*.db
+data/*.db-*
+data/.dev-secrets.json
+.demo-credentials.txt
+.env
+.env.*
+*.log
+.DS_Store
+coverage
+playwright-report
+test-results
+.e2e-data
+.smoke-shots
+scripts/smoke-ui.mjs
+scripts/journey-ui.mjs
+scripts/map-check.mjs
+scripts/track-map-check.mjs
+scripts/debug-login.mjs
+*.tsbuildinfo
+
+# Private keys & credentials — never commit
+*.key
+*.pem
+*.p12
+*.keystore
+*.jks
+
+# Personal screenshots / exports
+WhatsApp Image*
+*.jpeg
+*.jpg
+*.heic

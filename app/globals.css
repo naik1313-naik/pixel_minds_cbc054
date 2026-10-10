@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer utilities {
+  .gradient-mesh {
+    background:
+      radial-gradient(circle at 20% 20%, rgba(20, 184, 166, 0.18), transparent 45%),
+      radial-gradient(circle at 80% 0%, rgba(56, 189, 248, 0.16), transparent 40%),
+      radial-gradient(circle at 60% 90%, rgba(99, 102, 241, 0.12), transparent 45%);
+  }
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.animate-floaty { animation: floaty 5s ease-in-out infinite; }
+
+@keyframes pulsering {
+  0% { transform: scale(0.7); opacity: 0.7; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.animate-pulsering { animation: pulsering 1.8s ease-out infinite; }
+
+@keyframes dashmove {
+  to { stroke-dashoffset: -24; }
+}
+.borrow-line {
+  stroke-dasharray: 8 6;
+  animation: dashmove 0.8s linear infinite;
+}
+
+@keyframes fadeup {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeup { animation: fadeup 0.6s ease-out both; }
+
+.leaflet-container {
+  border-radius: 1rem;
+  z-index: 0;
+}
+
+/* Leaflet custom markers — divIcon wrapper must not clip the halo/pulse. */
+.mm-marker {
+  background: transparent;
+  border: none;
+}
+
+@keyframes mmPulse {
+  0% { transform: scale(0.6); opacity: 0.55; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-marker span[style*="mmPulse"],
+  .mm-marker span {
+    animation: none !important;
+  }
+  .animate-floaty,
+  .animate-pulsering,
+  .borrow-line,
+  .animate-fadeup {
+    animation: none !important;
+  }
+  .leaflet-fade-anim .leaflet-popup {
+    transition: none !important;
+  }
+}
