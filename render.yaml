@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: medimesh
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/medicines
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEMO_MODE
+        value: "1"
+      - key: LOCK_MINUTES
+        value: "30"
+      - key: APP_ENCRYPTION_KEY
+        generateValue: true
+      - key: SESSION_PEPPER
+        generateValue: true
