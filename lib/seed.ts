@@ -1,10 +1,10 @@
-import type Database from "better-sqlite3";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { hashPasswordSync } from "./password";
 import { encryptSecret, generateTotpSecret, totpUri } from "./crypto";
 import { dataDir } from "./paths";
+import { queryRun, queryRaw, queryReturning } from "./db";
 import {
   verifyDocument,
   demoRegistryLookup,
@@ -109,64 +109,56 @@ export interface DemoCredentials {
   totp_uri?: string;
 }
 
-export function seedAll(db: Database.Database) {
+export async function seedDatabase(): Promise<void> {
   const now = new Date().toISOString();
   const expiry = new Date(Date.now() + 1000 * 60 * 60 * 24 * 400).toISOString().slice(0, 10);
 
-  const insPharmacy = db.prepare(
-    `INSERT INTO pharmacies (id, name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count, licence_verified, licence_checked_at, licence_meta_json, created_at)
-     VALUES (@id, @name, @address, @lat, @lng, @drug_licence_no, @verification_status, @response_score, @fulfilment_count, @licence_verified, @licence_checked_at, @licence_meta_json, @created_at)`
-  );
   for (const p of PHARMACIES) {
     const licCheck = verifyDocument(
       { type: "DRUG_LICENCE", number: p.lic, name: p.name },
       demoRegistryLookup
     );
-    insPharmacy.run({
-      id: p.id,
-      name: p.name,
-      address: p.address,
-      lat: p.lat,
-      lng: p.lng,
-      drug_licence_no: p.lic,
-      verification_status: p.status,
-      response_score: p.score,
-      fulfilment_count: p.fulfil,
-      licence_verified: licCheck.status,
-      licence_checked_at: now,
-      licence_meta_json: JSON.stringify({
-        masked: licCheck.masked,
-        reference: licCheck.reference,
-        reasons: licCheck.reasons,
-      }),
-      created_at: now,
-    });
+    await queryRun(
+      `INSERT INTO pharmacies (id, name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count, licence_verified, licence_checked_at, licence_meta_json, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [
+        p.id,
+        p.name,
+        p.address,
+        p.lat,
+        p.lng,
+        p.lic,
+        p.status,
+        p.score,
+        p.fulfil,
+        licCheck.status,
+        now,
+        JSON.stringify({
+          masked: licCheck.masked,
+          reference: licCheck.reference,
+          reasons: licCheck.reasons,
+        }),
+        now,
+      ]
+    );
   }
 
-  const insMed = db.prepare(
-    "INSERT INTO medicines (id, name, salt, price_paise, rx_required) VALUES (?, ?, ?, ?, ?)"
-  );
-  for (const m of MEDICINES) insMed.run(m.id, m.name, m.salt, m.paise, m.rx);
+  for (const m of MEDICINES) {
+    await queryRun(
+      "INSERT INTO medicines (id, name, salt, price_paise, rx_required) VALUES ($1, $2, $3, $4, $5)",
+      [m.id, m.name, m.salt, m.paise, m.rx]
+    );
+  }
 
-  const insInv = db.prepare(
-    "INSERT INTO inventory (pharmacy_id, medicine_id, qty_total, qty_locked, expiry_date) VALUES (?, ?, ?, 0, ?)"
-  );
-  for (const [pid, mid, qty] of INVENTORY) insInv.run(pid, mid, qty, expiry);
+  for (const [pid, mid, qty] of INVENTORY) {
+    await queryRun(
+      "INSERT INTO inventory (pharmacy_id, medicine_id, qty_total, qty_locked, expiry_date) VALUES ($1, $2, $3, 0, $4)",
+      [pid, mid, qty, expiry]
+    );
+  }
 
   const credentials: DemoCredentials[] = [];
-  const insUser = db.prepare(
-    `INSERT INTO users (email, name, phone, password_hash, role, pharmacy_id, totp_secret_enc, totp_enabled,
-       vehicle_number, id_type, id_last4, id_number_enc, doc_status, doc_checked_at, doc_meta_json,
-       partner_online, partner_status, rating, created_at)
-     VALUES (@email, @name, @phone, @password_hash, @role, @pharmacy_id, @totp_secret_enc, @totp_enabled,
-       @vehicle_number, @id_type, @id_last4, @id_number_enc, @doc_status, @doc_checked_at, @doc_meta_json,
-       @partner_online, @partner_status, @rating, @created_at)`
-  );
-  const insCode = db.prepare(
-    "INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)"
-  );
-
-  function addUser(u: {
+  async function addUser(u: {
     email: string;
     name: string;
     phone?: string;
@@ -204,38 +196,49 @@ export function seedAll(db: Database.Database) {
         reasons: check.reasons,
       });
     }
-    const info = insUser.run({
-      email: u.email,
-      name: u.name,
-      phone: u.phone ?? null,
-      password_hash: hashPasswordSync(password),
-      role: u.role,
-      pharmacy_id: u.pharmacy_id ?? null,
-      totp_secret_enc: null,
-      totp_enabled: 0,
-      vehicle_number: u.vehicle ?? null,
-      id_type: u.idType ?? null,
-      id_last4: idLast4,
-      id_number_enc: idNumberEnc,
-      doc_status: docStatus,
-      doc_checked_at: docCheckedAt,
-      doc_meta_json: docMetaJson,
-      partner_online: u.online ?? 0,
-      partner_status: u.partnerStatus ?? null,
-      rating: u.rating ?? 4.8,
-      created_at: now,
-    });
-    const userId = Number(info.lastInsertRowid);
+    const inserted = await queryReturning<{ id: number }>(
+      `INSERT INTO users (email, name, phone, password_hash, role, pharmacy_id, totp_secret_enc, totp_enabled,
+         vehicle_number, id_type, id_last4, id_number_enc, doc_status, doc_checked_at, doc_meta_json,
+         partner_online, partner_status, rating, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING id`,
+      [
+        u.email,
+        u.name,
+        u.phone ?? null,
+        hashPasswordSync(password),
+        u.role,
+        u.pharmacy_id ?? null,
+        null,
+        0,
+        u.vehicle ?? null,
+        u.idType ?? null,
+        idLast4,
+        idNumberEnc,
+        docStatus,
+        docCheckedAt,
+        docMetaJson,
+        u.online ?? 0,
+        u.partnerStatus ?? null,
+        u.rating ?? 4.8,
+        now,
+      ]
+    );
+    const userId = inserted!.id;
     let totpSecret: string | undefined;
     let totpUriStr: string | undefined;
     if (u.totp) {
       totpSecret = generateTotpSecret();
-      db.prepare(
-        "UPDATE users SET totp_secret_enc = ?, totp_enabled = 1 WHERE id = ?"
-      ).run(encryptSecret(totpSecret), userId);
+      await queryRun(
+        "UPDATE users SET totp_secret_enc = $1, totp_enabled = 1 WHERE id = $2",
+        [encryptSecret(totpSecret), userId]
+      );
       totpUriStr = totpUri(totpSecret, u.email);
       for (let i = 0; i < 10; i++) {
-        insCode.run(userId, hashPasswordSync(crypto.randomBytes(9).toString("base64url")));
+        await queryRun(
+          "INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)",
+          [userId, hashPasswordSync(crypto.randomBytes(9).toString("base64url"))]
+        );
       }
     }
     credentials.push({
@@ -250,7 +253,7 @@ export function seedAll(db: Database.Database) {
   }
 
   // Admin (2FA mandatory, enforced in code).
-  addUser({
+  await addUser({
     email: "admin@medimesh.demo",
     name: "Demo Admin",
     role: "admin",
@@ -260,7 +263,7 @@ export function seedAll(db: Database.Database) {
 
   // Pharmacy owners (all owners have 2FA enabled for the demo).
   for (const p of PHARMACIES) {
-    addUser({
+    await addUser({
       email: `owner${p.id}@medimesh.demo`,
       name: `${p.name} Owner`,
       phone: `90000000${String(p.id).padStart(2, "0")}`,
@@ -270,7 +273,7 @@ export function seedAll(db: Database.Database) {
       note: p.status === "pending" ? "Pharmacy pending admin verification" : undefined,
     });
   }
-  addUser({
+  await addUser({
     email: "staff1@medimesh.demo",
     name: "Apollo Staff (Demo)",
     role: "pharmacy_staff",
@@ -278,22 +281,32 @@ export function seedAll(db: Database.Database) {
   });
 
   // Customers
-  addUser({ email: "customer1@medimesh.demo", name: "Asha Demo", phone: "9811100001", role: "customer" });
-  addUser({ email: "customer2@medimesh.demo", name: "Ravi Demo", phone: "9811100002", role: "customer" });
-  addUser({ email: "customer3@medimesh.demo", name: "Meera Demo", phone: "9811100003", role: "customer" });
+  await addUser({ email: "customer1@medimesh.demo", name: "Asha Demo", phone: "9811100001", role: "customer" });
+  await addUser({ email: "customer2@medimesh.demo", name: "Ravi Demo", phone: "9811100002", role: "customer" });
+  await addUser({ email: "customer3@medimesh.demo", name: "Meera Demo", phone: "9811100003", role: "customer" });
 
-  // Delivery partners (one pending for admin demo)
+  // Delivery partners
   const demoAadhaarBase = "23456789012";
   const demoAadhaar = demoAadhaarBase + verhoeffCheckDigit(demoAadhaarBase);
-  addUser({ email: "rider1@medimesh.demo", name: "Kiran Demo", phone: "9722200001", role: "delivery_partner", vehicle: "KA-01-DEMO-1111", idType: "DL", idNumber: "KA0120180004821", online: 1, partnerStatus: "verified", rating: 4.9, note: "Approved partner" });
-  addUser({ email: "rider2@medimesh.demo", name: "Sana Demo", phone: "9722200002", role: "delivery_partner", vehicle: "KA-02-DEMO-2222", idType: "Aadhaar", idNumber: demoAadhaar, online: 1, partnerStatus: "verified", rating: 4.7, note: "Approved partner (Aadhaar verified)" });
-  addUser({ email: "rider3@medimesh.demo", name: "Vikram Demo", phone: "9722200003", role: "delivery_partner", vehicle: "KA-03-DEMO-3333", idType: "DL", idNumber: "KA0120190001177", online: 0, partnerStatus: "verified", rating: 4.6 });
-  addUser({ email: "rider4@medimesh.demo", name: "Neha Demo", phone: "9722200004", role: "delivery_partner", vehicle: "KA-04-DEMO-4444", idType: "DL", idNumber: "KA0120200005566", online: 0, partnerStatus: "verified", rating: 4.5, note: "Auto-approved partner" });
+  await addUser({ email: "rider1@medimesh.demo", name: "Kiran Demo", phone: "9722200001", role: "delivery_partner", vehicle: "KA-01-DEMO-1111", idType: "DL", idNumber: "KA0120180004821", online: 1, partnerStatus: "verified", rating: 4.9, note: "Approved partner" });
+  await addUser({ email: "rider2@medimesh.demo", name: "Sana Demo", phone: "9722200002", role: "delivery_partner", vehicle: "KA-02-DEMO-2222", idType: "Aadhaar", idNumber: demoAadhaar, online: 1, partnerStatus: "verified", rating: 4.7, note: "Approved partner (Aadhaar verified)" });
+  await addUser({ email: "rider3@medimesh.demo", name: "Vikram Demo", phone: "9722200003", role: "delivery_partner", vehicle: "KA-03-DEMO-3333", idType: "DL", idNumber: "KA0120190001177", online: 0, partnerStatus: "verified", rating: 4.6 });
+  await addUser({ email: "rider4@medimesh.demo", name: "Neha Demo", phone: "9722200004", role: "delivery_partner", vehicle: "KA-04-DEMO-4444", idType: "DL", idNumber: "KA0120200005566", online: 0, partnerStatus: "verified", rating: 4.5, note: "Auto-approved partner" });
 
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('lock_seconds', ?)").run(
-    String(defaultLockSeconds())
+  // Explicit-id inserts left the sequences behind; realign them.
+  await queryRaw(`
+    SELECT setval(pg_get_serial_sequence('pharmacies','id'), GREATEST((SELECT MAX(id) FROM pharmacies), 1));
+    SELECT setval(pg_get_serial_sequence('users','id'), GREATEST((SELECT MAX(id) FROM users), 1));
+    SELECT setval(pg_get_serial_sequence('medicines','id'), GREATEST((SELECT MAX(id) FROM medicines), 1));
+  `);
+
+  await queryRun(
+    "INSERT INTO settings (key, value) VALUES ('lock_seconds', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    [String(defaultLockSeconds())]
   );
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('demo_outbreak', '0')").run();
+  await queryRun(
+    "INSERT INTO settings (key, value) VALUES ('demo_outbreak', '0') ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+  );
 
   writeCredentials(credentials);
   printCredentials(credentials);
