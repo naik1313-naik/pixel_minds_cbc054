@@ -7,6 +7,6 @@ export async function GET() {
   const current = await getCurrentUser();
   if (!current) return json({ user: null });
   const user = publicUser(current.user);
-  const pharmacy = current.user.pharmacy_id ? getPharmacy(current.user.pharmacy_id) : null;
+  const pharmacy = current.user.pharmacy_id ? await getPharmacy(current.user.pharmacy_id) : null;
   return json({ user, pharmacy });
 }

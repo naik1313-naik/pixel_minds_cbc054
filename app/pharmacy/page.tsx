@@ -11,7 +11,7 @@ export default async function PharmacyPage() {
   if (current.user.role !== "pharmacy_owner" && current.user.role !== "pharmacy_staff" && current.user.role !== "admin") {
     redirect(current.user.role === "customer" ? "/app" : "/rider");
   }
-  const pharmacy = current.user.pharmacy_id ? getPharmacy(current.user.pharmacy_id) : null;
+  const pharmacy = current.user.pharmacy_id ? await getPharmacy(current.user.pharmacy_id) : null;
   return (
     <PharmacyConsole
       pharmacyName={pharmacy?.name ?? "Pharmacy console"}

@@ -6,5 +6,5 @@ export const GET = guard(["admin"], async (_ctx, req: NextRequest) => {
   const url = new URL(req.url);
   const limit = Number(url.searchParams.get("limit") ?? "100");
   const actorUserId = url.searchParams.get("actorUserId");
-  return json({ audit: listAudit({ limit, actorUserId: actorUserId ? Number(actorUserId) : undefined }) });
+  return json({ audit: await listAudit({ limit, actorUserId: actorUserId ? Number(actorUserId) : undefined }) });
 });

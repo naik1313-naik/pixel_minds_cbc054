@@ -9,7 +9,7 @@ export const POST = guard(["delivery_partner"], async (ctx, req: NextRequest, pa
   const body = await req.json().catch(() => null);
   const parsed = handoverSchema.safeParse(body);
   if (!parsed.success) return error(400, "Invalid input");
-  const res = verifyHandover({
+  const res = await verifyHandover({
     deliveryId: id,
     userId: ctx.user.id,
     otp: parsed.data.otp.trim(),

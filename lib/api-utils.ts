@@ -25,7 +25,7 @@ export interface AuthContext {
 export async function authUser(): Promise<AuthContext | null> {
   const token = await getSessionToken();
   if (!token) return null;
-  const res = validateSession(token);
+  const res = await validateSession(token);
   if (!res) return null;
   return { user: res.user, token };
 }

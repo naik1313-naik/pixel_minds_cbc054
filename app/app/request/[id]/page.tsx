@@ -12,15 +12,13 @@ export default async function RequestPage({ params }: { params: Promise<{ id: st
   const { id } = await params;
   const requestId = Number(id);
   if (!Number.isFinite(requestId)) notFound();
-  const detail = getRequestDetail(requestId);
+  const detail = await getRequestDetail(requestId);
   if (!detail) notFound();
-  if (
-    !canViewRequest(current.user, {
-      customer_id: detail.request.customer_id,
-      preferred_pharmacy_id: detail.request.preferred_pharmacy_id,
-      id: requestId,
-    })
-  )
-    redirect("/app");
+  const canView = await canViewRequest(current.user, {
+    customer_id: detail.request.customer_id,
+    preferred_pharmacy_id: detail.request.preferred_pharmacy_id,
+    id: requestId,
+  });
+  if (!canView) redirect("/app");
   return <RequestTracker requestId={requestId} />;
 }

@@ -21,10 +21,10 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return error(400, "Invalid input");
 
   const ip = clientIp(req);
-  const result = complete2fa(parsed.data.challenge, parsed.data.code, { ip });
+  const result = await complete2fa(parsed.data.challenge, parsed.data.code, { ip });
   if (!result.ok || !result.user) return error(401, result.reason ?? "Invalid code");
 
-  const token = createSession(result.user.id, result.user.role, {
+  const token = await createSession(result.user.id, result.user.role, {
     ip,
     userAgent: req.headers.get("user-agent"),
   });

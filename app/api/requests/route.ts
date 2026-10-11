@@ -21,7 +21,7 @@ export const GET = guard(null, async (ctx, req: NextRequest) => {
   } else if (ctx.user.role !== "admin" && scope !== "own") {
     filter.customerId = ctx.user.id;
   }
-  return json({ requests: listRequests(filter) });
+  return json({ requests: await listRequests(filter) });
 });
 
 export const POST = guard(["customer"], async (ctx, req: NextRequest) => {
@@ -33,7 +33,7 @@ export const POST = guard(["customer"], async (ctx, req: NextRequest) => {
     return error(400, "Delivery address is required for delivery requests");
   }
   const idempotencyKey = req.headers.get("idempotency-key") ?? undefined;
-  const { requestId, created } = createRequest({
+  const { requestId, created } = await createRequest({
     medicineId: data.medicineId,
     qty: data.qty,
     customerId: ctx.user.id,
@@ -45,7 +45,7 @@ export const POST = guard(["customer"], async (ctx, req: NextRequest) => {
     idempotencyKey,
   });
   if (created) {
-    recordAudit({ actorUserId: ctx.user.id, actorRole: ctx.user.role, action: "request.created", entityType: "request", entityId: requestId });
+    await recordAudit({ actorUserId: ctx.user.id, actorRole: ctx.user.role, action: "request.created", entityType: "request", entityId: requestId });
   }
-  return json({ requestId, detail: getRequestDetail(requestId) }, created ? 201 : 200);
+  return json({ requestId, detail: await getRequestDetail(requestId) }, created ? 201 : 200);
 });

@@ -2,9 +2,9 @@ import { guard, json } from "@/lib/api-utils";
 import { listDeliveriesForPartner, sweepDeliveries, pendingOffersForPartner } from "@/lib/delivery";
 
 export const GET = guard(["delivery_partner"], async (ctx) => {
-  sweepDeliveries();
+  await sweepDeliveries();
   return json({
-    deliveries: listDeliveriesForPartner(ctx.user.id),
-    offers: pendingOffersForPartner(ctx.user.id),
+    deliveries: await listDeliveriesForPartner(ctx.user.id),
+    offers: await pendingOffersForPartner(ctx.user.id),
   });
 });

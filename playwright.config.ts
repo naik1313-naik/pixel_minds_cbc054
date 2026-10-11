@@ -23,7 +23,8 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "rm -rf .e2e-data && MM_DATA_DIR=.e2e-data DEMO_MODE=1 MM_QUIET=1 npx next dev -p " + PORT,
+      "rm -rf .e2e-data && DATABASE_URL=postgresql://localhost/medimesh_e2e DATABASE_SSL=false MM_DATA_DIR=.e2e-data DEMO_MODE=1 MM_QUIET=1 npx next dev -p " +
+      PORT,
     url: BASE_URL,
     reuseExistingServer: false,
     timeout: 120_000,

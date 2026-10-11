@@ -24,26 +24,26 @@ export const POST = guard(["admin"], async (ctx, req: NextRequest) => {
 
   switch (data.action) {
     case "reset": {
-      resetDemo();
-      recordAudit({ actorUserId: ctx.user.id, actorRole: ctx.user.role, action: "demo.reset" });
+      await resetDemo();
+      await recordAudit({ actorUserId: ctx.user.id, actorRole: ctx.user.role, action: "demo.reset" });
       return json({ ok: true, action: "reset" });
     }
     case "outbreak": {
-      simulateOutbreak(data.medicineId, data.area);
+      await simulateOutbreak(data.medicineId, data.area);
       return json({ ok: true, action: "outbreak" });
     }
     case "lock20": {
-      setLockSeconds(20);
+      await setLockSeconds(20);
       return json({ ok: true, action: "lock20", lockSeconds: 20 });
     }
     case "lock30": {
-      setLockSeconds(1800);
+      await setLockSeconds(1800);
       return json({ ok: true, action: "lock30", lockSeconds: 1800 });
     }
     case "step": {
-      const d = getDelivery(data.deliveryId);
+      const d = await getDelivery(data.deliveryId);
       if (!d) return error(404, "Delivery not found");
-      const res = demoStep(data.deliveryId);
+      const res = await demoStep(data.deliveryId);
       return json(res);
     }
   }

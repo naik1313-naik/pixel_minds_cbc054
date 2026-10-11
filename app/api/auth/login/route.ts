@@ -25,11 +25,11 @@ export async function POST(req: NextRequest) {
   if (!result.ok || !result.user) {
     return error(401, result.reason ?? "Invalid email or password");
   }
-  const token = createSession(result.user.id, result.user.role, {
+  const token = await createSession(result.user.id, result.user.role, {
     ip,
     userAgent: req.headers.get("user-agent"),
   });
   await setSessionCookie(token);
-  recordAudit({ actorUserId: result.user.id, actorRole: result.user.role, action: "auth.login", entityType: "user", entityId: result.user.id, ip });
+  await recordAudit({ actorUserId: result.user.id, actorRole: result.user.role, action: "auth.login", entityType: "user", entityId: result.user.id, ip });
   return json({ ok: true, role: result.user.role, name: result.user.name });
 }

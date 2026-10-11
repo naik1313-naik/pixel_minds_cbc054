@@ -9,7 +9,7 @@ export const POST = guard(["delivery_partner"], async (ctx, req: NextRequest, pa
   const body = await req.json().catch(() => null);
   const parsed = locationSchema.safeParse(body);
   if (!parsed.success) return error(400, "Invalid coordinates");
-  const res = recordLocation({
+  const res = await recordLocation({
     deliveryId: id,
     userId: ctx.user.id,
     lat: parsed.data.lat,

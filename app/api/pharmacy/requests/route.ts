@@ -7,7 +7,7 @@ export const GET = guard(["pharmacy_owner", "pharmacy_staff", "admin"], async (c
   const status = url.searchParams.get("status") ?? undefined;
   const scope = url.searchParams.get("scope") ?? "mine";
   if (ctx.user.role === "admin" || scope === "all") {
-    return json({ requests: listRequests({ status }) });
+    return json({ requests: await listRequests({ status }) });
   }
-  return json({ requests: listRequests({ pharmacyId: ctx.user.pharmacy_id ?? -1, status }) });
+  return json({ requests: await listRequests({ pharmacyId: ctx.user.pharmacy_id ?? -1, status }) });
 });

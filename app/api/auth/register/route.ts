@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { getDb, nowIso } from "@/lib/db";
+import { queryReturning, nowIso } from "@/lib/db";
 import { registerUser } from "@/lib/auth";
 import {
   registerCustomerSchema,
@@ -55,13 +55,11 @@ export async function POST(req: NextRequest) {
         doc: docSummary(licenceCheck),
       });
     }
-    const db = getDb();
-    const info = db
-      .prepare(
-        `INSERT INTO pharmacies (name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count, licence_verified, licence_checked_at, licence_meta_json, created_at)
-         VALUES (?, ?, ?, ?, ?, 'verified', 0.8, 0, ?, ?, ?, ?)`
-      )
-      .run(
+    const row = await queryReturning<{ id: number }>(
+      `INSERT INTO pharmacies (name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count, licence_verified, licence_checked_at, licence_meta_json, created_at)
+         VALUES ($1, $2, $3, $4, $5, 'verified', 0.8, 0, $6, $7, $8, $9)
+         RETURNING id`,
+      [
         data.pharmacyName,
         data.address,
         data.lat,
@@ -74,9 +72,10 @@ export async function POST(req: NextRequest) {
           reference: licenceCheck.reference,
           reasons: licenceCheck.reasons,
         }),
-        nowIso()
-      );
-    pharmacyId = Number(info.lastInsertRowid);
+        nowIso(),
+      ]
+    );
+    pharmacyId = row?.id;
   }
 
   const result = await registerUser({
@@ -97,7 +96,7 @@ export async function POST(req: NextRequest) {
       doc: result.docCheck ? docSummary(result.docCheck) : undefined,
     });
   }
-  recordAudit({
+  await recordAudit({
     actorUserId: result.userId,
     actorRole: data.role,
     action: "auth.register",

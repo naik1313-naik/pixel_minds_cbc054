@@ -13,11 +13,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const medicineId = Number(id);
   if (!Number.isFinite(medicineId)) return error(400, "Invalid id");
-  const medicine = getMedicine(medicineId);
+  const medicine = await getMedicine(medicineId);
   if (!medicine) return error(404, "Medicine not found");
 
-  const avail = availability(medicineId);
-  const ranked = rankPharmacies(medicineId, 10);
+  const avail = await availability(medicineId);
+  const ranked = await rankPharmacies(medicineId, 10);
   const distMap = new Map(ranked.map((r) => [r.pharmacy.id, r.distance_km]));
   const scoreMap = new Map(ranked.map((r) => [r.pharmacy.id, r.score]));
 
@@ -38,8 +38,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     medicine,
     total_free: avail?.total_free ?? 0,
     pharmacies,
-    substitutes: findSubstitutes(medicineId),
-    competing: competingInfo(medicineId),
+    substitutes: await findSubstitutes(medicineId),
+    competing: await competingInfo(medicineId),
     origin: CUSTOMER_LOCATION,
   });
 }

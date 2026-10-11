@@ -35,3 +35,4 @@ WhatsApp Image*
 *.jpg
 *.heic
 .vercel
+.env*

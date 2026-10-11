@@ -9,10 +9,10 @@ export const runtime = "nodejs";
 export const GET = guard(null, async (ctx, req, params) => {
   const id = Number(params.id);
   if (!Number.isFinite(id)) return error(400, "Invalid id");
-  const detail = getRequestDetail(id);
+  const detail = await getRequestDetail(id);
   if (!detail) return error(404, "Request not found");
   const r = detail.request as { customer_id: number | null; preferred_pharmacy_id: number | null };
-  if (!canViewRequest(ctx.user, { customer_id: r.customer_id, preferred_pharmacy_id: r.preferred_pharmacy_id, id }))
+  if (!(await canViewRequest(ctx.user, { customer_id: r.customer_id, preferred_pharmacy_id: r.preferred_pharmacy_id, id })))
     return error(403, "Forbidden");
 
   const encoder = new TextEncoder();

@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ["better-sqlite3"],
+  serverExternalPackages: ["pg", "@node-rs/argon2"],
   eslint: { ignoreDuringBuilds: true },
 };
 
