@@ -114,11 +114,6 @@ export default function RegisterForm({ role }: { role: Role }) {
               {done.doc.valid ? "✓ Document verified" : "Document check failed"} · {done.doc.masked}
             </p>
           )}
-          {done.pending && (
-            <p className="mt-2 text-sm text-amber-700">
-              Your account is being reviewed. You will be able to sign in shortly.
-            </p>
-          )}
           <Link href="/login" className="mt-6 inline-block font-semibold text-teal-700 hover:underline">
             Go to sign in
           </Link>
