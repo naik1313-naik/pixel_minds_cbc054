@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Boxes, ClipboardList, Plus, RefreshCw, Trash2, Truck, Wallet } from "lucide-react";
+import { ArrowRightLeft, Boxes, ClipboardList, Link2, Plus, RefreshCw, Trash2, Truck, Wallet } from "lucide-react";
 import { Badge, Button, Card, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
+import BatchPanel from "@/components/blockchain/BatchPanel";
+import TransferPanel from "@/components/blockchain/TransferPanel";
 
 interface RequestRow {
   id: number;
@@ -56,6 +58,8 @@ interface DeliveryRow {
 const TABS = [
   { key: "requests", label: "Incoming requests", icon: <ClipboardList className="h-4 w-4" /> },
   { key: "inventory", label: "Inventory", icon: <Boxes className="h-4 w-4" /> },
+  { key: "batches", label: "Batches", icon: <Link2 className="h-4 w-4" /> },
+  { key: "transfers", label: "Transfers", icon: <ArrowRightLeft className="h-4 w-4" /> },
   { key: "ledger", label: "Ledger", icon: <Wallet className="h-4 w-4" /> },
   { key: "deliveries", label: "Deliveries", icon: <Truck className="h-4 w-4" /> },
 ] as const;
@@ -63,9 +67,11 @@ const TABS = [
 export default function PharmacyConsole({
   pharmacyName,
   verification,
+  pharmacyId,
 }: {
   pharmacyName: string;
   verification: string;
+  pharmacyId: number | null;
 }) {
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("requests");
   const [requests, setRequests] = useState<RequestRow[]>([]);
@@ -270,6 +276,10 @@ export default function PharmacyConsole({
           </Card>
         </div>
       )}
+
+      {tab === "batches" && <BatchPanel />}
+
+      {tab === "transfers" && <TransferPanel myPharmacyId={pharmacyId} />}
 
       {tab === "ledger" && (
         <Card className="overflow-x-auto">

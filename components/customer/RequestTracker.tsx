@@ -7,6 +7,7 @@ import { ArrowLeft, CheckCircle2, Clock, MapPin, Package, ShieldCheck, Store, Tr
 import { Alert, Badge, Button, Card, Spinner, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
 import { useEventStream } from "@/lib/useEventStream";
+import DeliveryAuditTimeline from "@/components/blockchain/DeliveryAuditTimeline";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -239,6 +240,9 @@ export default function RequestTracker({ requestId }: { requestId: number }) {
               )}
             </div>
           )}
+          <div className="mt-5">
+            <DeliveryAuditTimeline deliveryId={delivery.id} />
+          </div>
         </Card>
       )}
 

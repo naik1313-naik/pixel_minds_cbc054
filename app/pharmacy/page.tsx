@@ -16,6 +16,7 @@ export default async function PharmacyPage() {
     <PharmacyConsole
       pharmacyName={pharmacy?.name ?? "Pharmacy console"}
       verification={pharmacy?.verification_status ?? "unknown"}
+      pharmacyId={current.user.pharmacy_id ?? null}
     />
   );
 }

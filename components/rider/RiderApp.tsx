@@ -36,6 +36,16 @@ const NEXT_STATUS: Record<string, string> = {
   OutForDelivery: "ArrivedAtDestination",
 };
 
+/**
+ * Mirrors the app's delivery statuses onto the four on-chain milestones.
+ * Packed is recorded by the pharmacy when it marks the parcel ready.
+ */
+const MILESTONE_FOR_STATUS: Record<string, "Packed" | "PickedUp" | "OutForDelivery" | "Delivered"> = {
+  PickedUp: "PickedUp",
+  OutForDelivery: "OutForDelivery",
+  ArrivedAtDestination: "Delivered",
+};
+
 export default function RiderApp({
   name,
   online,
@@ -128,6 +138,21 @@ export default function RiderApp({
     setBusy(true);
     try {
       await api.post(`/api/rider/deliveries/${detail.delivery.id}/status`, { status: next });
+      // Mirror the milestone on-chain. Failure here must NOT block the rider's
+      // real workflow, so it is reported without reverting the status change.
+      const milestone = MILESTONE_FOR_STATUS[next];
+      if (milestone) {
+        try {
+          await api.post(`/api/blockchain/deliveries/${detail.delivery.id}/events`, { milestone });
+        } catch (chainErr) {
+          toast(
+            chainErr instanceof Error
+              ? `Status updated, but the on-chain audit record failed: ${chainErr.message}`
+              : "Status updated, but the on-chain audit record failed",
+            "error"
+          );
+        }
+      }
       await loadDetail(detail.delivery.id);
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed", "error");

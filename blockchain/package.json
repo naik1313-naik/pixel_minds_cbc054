@@ -1,0 +1,28 @@
+{
+  "name": "medimesh-blockchain",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MediMeshLedger smart contract + local Hardhat network for the MediMesh audit layer",
+  "scripts": {
+    "compile": "hardhat compile",
+    "node": "hardhat node --hostname 127.0.0.1 --port 8545",
+    "test": "hardhat test",
+    "deploy": "hardhat run scripts/deploy.ts --network localhost",
+    "deploy:dev": "hardhat run scripts/deploy.ts --network hardhat",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.8",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@openzeppelin/contracts": "^5.1.0",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.7",
+    "chai": "^4.5.0",
+    "ethers": "^6.13.5",
+    "hardhat": "^2.29.1",
+    "mocha": "^10.8.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}

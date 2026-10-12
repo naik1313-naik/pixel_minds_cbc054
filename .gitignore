@@ -36,3 +36,15 @@ WhatsApp Image*
 *.heic
 .vercel
 .env*
+
+# --- Blockchain workspace ---
+blockchain/node_modules
+blockchain/artifacts
+blockchain/cache
+blockchain/typechain-types
+
+# The deployment manifest contains the PUBLIC Hardhat dev private keys used by
+# the local demo (the contract enforces roles per address, so each pharmacy
+# wallet needs a key). They are deliberately not committed — regenerate them
+# with `cd blockchain && npm run deploy`.
+blockchain/deployments/

@@ -18,10 +18,19 @@
     "db:inspect": "node scripts/db-inspect.mjs",
     "db:reset": "node scripts/db-reset.mjs",
     "e2e": "playwright test",
-    "e2e:install": "playwright install chromium"
+    "e2e:install": "playwright install chromium",
+    "chain:install": "npm --prefix blockchain install",
+    "chain:compile": "npm --prefix blockchain run compile",
+    "chain:test": "npm --prefix blockchain test",
+    "chain:node": "npm --prefix blockchain run node",
+    "chain:deploy": "npm --prefix blockchain run deploy",
+    "abi:generate": "node scripts/generate-abi.mjs",
+    "smoke:blockchain": "node scripts/smoke-blockchain.mjs",
+    "smoke:delivery": "node scripts/smoke-delivery-audit.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",
+    "ethers": "^6.17.0",
     "framer-motion": "^14.1.0",
     "gsap": "^3.15.0",
     "leaflet": "^1.9.4",

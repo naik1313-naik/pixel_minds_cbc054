@@ -215,6 +215,103 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- =============================================================
+-- Blockchain audit layer (MediMeshLedger)
+--
+-- SQLite/Postgres stays the operational source of truth. These tables hold
+-- only non-sensitive data: opaque references, metadata hashes and transaction
+-- pointers. No customer PII is stored here.
+-- =============================================================
+
+-- Medicine batches. Metadata JSON holds non-sensitive catalogue fields only.
+CREATE TABLE IF NOT EXISTS medicine_batches (
+  id SERIAL PRIMARY KEY,
+  batch_ref TEXT NOT NULL UNIQUE,           -- opaque, e.g. MM-7QK4-2F9D-A1B2-C3D4E5F6
+  medicine_id INTEGER NOT NULL REFERENCES medicines(id),
+  pharmacy_id INTEGER NOT NULL REFERENCES pharmacies(id),
+  quantity_units INTEGER NOT NULL,
+  expiry_date TEXT NOT NULL,
+  manufactured_at TEXT NOT NULL,
+  supplier_ref TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,              -- canonical non-sensitive metadata
+  metadata_hash TEXT NOT NULL,              -- keccak256 of canonical encoding
+  batch_id_hash TEXT NOT NULL UNIQUE,       -- keccak256(batch_ref), the on-chain key
+  status TEXT NOT NULL DEFAULT 'Pending',   -- Pending | Submitted | Registered | Revoked | Failed | NeedsReconciliation
+  tx_hash TEXT,
+  block_number INTEGER,
+  tx_operation_id INTEGER,                  -- -> blockchain_operations.id
+  error TEXT,
+  registered_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Pharmacy-to-pharmacy transfers. Stock movement is applied by the
+-- application; the chain records the agreed lifecycle only.
+CREATE TABLE IF NOT EXISTS batch_transfers (
+  id SERIAL PRIMARY KEY,
+  transfer_ref TEXT NOT NULL UNIQUE,        -- opaque
+  transfer_id_hash TEXT NOT NULL UNIQUE,    -- keccak256(transfer_ref), on-chain key
+  batch_id INTEGER NOT NULL REFERENCES medicine_batches(id),
+  from_pharmacy_id INTEGER NOT NULL REFERENCES pharmacies(id),
+  to_pharmacy_id INTEGER NOT NULL REFERENCES pharmacies(id),
+  quantity INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Initiated', -- Initiated | Confirmed | Rejected | Cancelled | Failed
+  stock_applied INTEGER NOT NULL DEFAULT 0, -- idempotency guard: 1 once applied
+  tx_hash TEXT,
+  block_number INTEGER,
+  confirm_tx_hash TEXT,
+  confirm_block_number INTEGER,
+  tx_operation_id INTEGER,
+  confirm_operation_id INTEGER,
+  reject_reason TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  settled_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+-- Delivery milestone audit trail linked to the existing deliveries table.
+CREATE TABLE IF NOT EXISTS delivery_audit (
+  id SERIAL PRIMARY KEY,
+  delivery_id INTEGER NOT NULL REFERENCES deliveries(id),
+  order_ref TEXT NOT NULL,                  -- opaque
+  order_ref_hash TEXT NOT NULL,             -- keccak256(order_ref), on-chain key
+  milestone TEXT NOT NULL,                  -- Packed | PickedUp | OutForDelivery | Delivered
+  milestone_code INTEGER NOT NULL,
+  actor_user_id INTEGER REFERENCES users(id),
+  actor_role TEXT NOT NULL,
+  actor_wallet TEXT,
+  tx_hash TEXT,
+  block_number INTEGER,
+  tx_operation_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'Pending',   -- Pending | Recorded | Failed
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+
+-- Durable outbox for blockchain operations. An operation row is persisted
+-- BEFORE any transaction is submitted so an uncertain outcome can always be
+-- reconciled instead of blindly retried.
+CREATE TABLE IF NOT EXISTS blockchain_operations (
+  id SERIAL PRIMARY KEY,
+  operation_ref TEXT NOT NULL UNIQUE,       -- internal, opaque
+  operation_type TEXT NOT NULL,             -- batch.register | batch.revoke | transfer.initiate
+                                           -- | transfer.confirm | transfer.reject | delivery.milestone
+  entity_type TEXT NOT NULL,                -- batch | transfer | delivery
+  entity_id INTEGER NOT NULL,
+  idempotency_key TEXT UNIQUE,              -- caller-supplied dedupe key
+  status TEXT NOT NULL DEFAULT 'Pending',   -- Pending | Submitted | Confirmed | Failed | NeedsReconciliation
+  tx_hash TEXT,
+  block_number INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  confirmed_at TEXT
+);
+
 -- Idempotent column additions for later schema versions.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS id_number_enc TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_status TEXT;
@@ -223,6 +320,21 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_meta_json TEXT;
 ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS licence_verified TEXT;
 ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS licence_checked_at TEXT;
 ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS licence_meta_json TEXT;
+
+-- Blockchain audit layer indexes.
+CREATE INDEX IF NOT EXISTS idx_batches_pharmacy ON medicine_batches (pharmacy_id);
+CREATE INDEX IF NOT EXISTS idx_batches_status ON medicine_batches (status);
+CREATE INDEX IF NOT EXISTS idx_batches_medicine ON medicine_batches (medicine_id);
+CREATE INDEX IF NOT EXISTS idx_transfers_batch ON batch_transfers (batch_id);
+CREATE INDEX IF NOT EXISTS idx_transfers_from ON batch_transfers (from_pharmacy_id);
+CREATE INDEX IF NOT EXISTS idx_transfers_to ON batch_transfers (to_pharmacy_id);
+CREATE INDEX IF NOT EXISTS idx_transfers_status ON batch_transfers (status);
+CREATE INDEX IF NOT EXISTS idx_delivery_audit_delivery ON delivery_audit (delivery_id);
+CREATE INDEX IF NOT EXISTS idx_delivery_audit_order ON delivery_audit (order_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_audit_unique
+  ON delivery_audit (delivery_id, milestone);
+CREATE INDEX IF NOT EXISTS idx_bc_ops_status ON blockchain_operations (status);
+CREATE INDEX IF NOT EXISTS idx_bc_ops_entity ON blockchain_operations (entity_type, entity_id);
 
 CREATE INDEX IF NOT EXISTS idx_inventory_med ON inventory (medicine_id);
 CREATE INDEX IF NOT EXISTS idx_requests_customer ON requests (customer_id);

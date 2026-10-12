@@ -68,6 +68,47 @@ export const inventoryDeleteSchema = z.object({
   medicineId: z.number().int().positive(),
 });
 
+// ---------------------------------------------------------------- blockchain
+// Mirrors the MedMeshLedger contract constraints. Non-sensitive fields only:
+// customer PII is never accepted into a batch or transfer.
+
+const dateString = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+  .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid date");
+
+export const batchRegisterSchema = z.object({
+  medicineId: z.number().int().positive(),
+  quantityUnits: z.number().int().min(1).max(100000),
+  expiryDate: dateString,
+  manufacturedAt: dateString,
+  supplierRef: z
+    .string()
+    .min(2, "Supplier reference is required")
+    .max(64)
+    .regex(/^[A-Za-z0-9\-_/.]+$/, "Use letters, digits, - _ / . only"),
+});
+
+export const transferInitiateSchema = z.object({
+  batchId: z.number().int().positive(),
+  fromPharmacyId: z.number().int().positive(),
+  toPharmacyId: z.number().int().positive(),
+  quantity: z.number().int().min(1, "Quantity must be greater than zero").max(100000),
+});
+
+export const transferSettleSchema = z.object({
+  reason: z.string().max(200).optional(),
+});
+
+/** Milestones mirror MediMeshLedger.Milestone exactly. */
+export const deliveryMilestoneSchema = z.object({
+  milestone: z.enum(["Packed", "PickedUp", "OutForDelivery", "Delivered"]),
+});
+
+export const reconcileSchema = z.object({
+  confirm: z.boolean().optional(),
+});
+
 export const locationSchema = z.object({
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),

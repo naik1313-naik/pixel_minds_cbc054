@@ -6,8 +6,11 @@ fulfilment history, soft-locks stock atomically, borrows from peer pharmacies wh
 one is short, and delivers it — with live rider tracking, an OTP-verified handover, a transparent
 inter-pharmacy ledger and a full audit trail.
 
-Four role-based apps (customer, pharmacy, delivery partner, admin) over a single SQLite source of
-truth. No external accounts, API keys or cloud — a self-contained local prototype.
+Four role-based apps (customer, pharmacy, delivery partner, admin) over a single PostgreSQL
+source of truth. No external accounts, API keys or cloud — a self-contained local prototype.
+
+An optional **blockchain audit layer** records medicine batches, inter-pharmacy transfers and
+delivery milestones on a local Hardhat EVM. See [docs/blockchain.md](docs/blockchain.md).
 
 ---
 
@@ -17,12 +20,13 @@ truth. No external accounts, API keys or cloud — a self-contained local protot
 |-----------|--------|
 | Framework | Next.js 15 (App Router) + TypeScript (strict) |
 | Styling   | Tailwind CSS 3 |
-| Database  | SQLite via `better-sqlite3` (WAL, single file, auto-created + seeded on first run) |
+| Database  | PostgreSQL via `pg` (schema in `lib/schema.sql`, auto-applied + seeded on first run) |
 | Auth      | `@node-rs/argon2` (argon2id) + server-side sessions + RFC-6238 TOTP 2FA |
 | Realtime  | Server-Sent Events (SSE) over an in-process event bus |
 | Maps      | Leaflet + OpenStreetMap (`react-leaflet`, client-only via `next/dynamic`) |
+| Blockchain (optional) | Solidity 0.8.24 + Hardhat + ethers v6 (local chain, chainId 31337) |
 | Validation| `zod` |
-| Tests     | `vitest` (unit/integration) + `@playwright/test` (e2e, desktop + mobile) |
+| Tests     | `vitest` (unit/integration) + `@playwright/test` (e2e) + Hardhat (contracts) |
 
 ---
 
@@ -33,8 +37,9 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. On first run the app creates `data/medimesh.db`, applies the schema
-and seeds 8 Bengaluru pharmacies, 24 medicines and demo users for every role.
+Open <http://localhost:3000>. On first run the app applies `lib/schema.sql` to the PostgreSQL
+database in `DATABASE_URL` (default `postgresql://localhost/medimesh`) and seeds 8 Bengaluru
+pharmacies, 24 medicines and demo users for every role.
 
 **Demo credentials** are printed to the server terminal and written to `data/.demo-credentials.txt`
 (git-ignored). Passwords are random per seed run and regenerate on every **Reset**. Accounts with
@@ -123,9 +128,41 @@ Delivery state machine:
 
 ---
 
+## Blockchain audit layer (optional)
+
+Medicine batches, inter-pharmacy transfers and delivery milestones can be anchored to a **local
+Hardhat EVM** (chainId 31337). The database stays the operational source of truth; the chain only
+records a verifiable audit trail. Everything except the audit layer keeps working when the chain is
+offline.
+
+```bash
+npm run chain:install     # once
+npm run chain:node        # terminal 1 — http://127.0.0.1:8545
+npm run chain:compile     # terminal 2
+npm run chain:test        # 43 contract tests
+npm run chain:deploy      # writes blockchain/deployments/local.json
+npm run abi:generate      # refreshes lib/blockchain/abi.generated.json
+npm run dev               # terminal 3
+```
+
+Then use the **Batches** and **Transfers** tabs in the pharmacy console. Batch QR codes lead to the
+public verification page at `/verify/<batchRef>`.
+
+End-to-end verification against the live local chain:
+
+```bash
+npm run smoke:blockchain  # 32 checks
+npm run smoke:delivery    # 12 checks
+```
+
+Only opaque references and hashes go on-chain — never customer names, addresses, prescriptions or
+GPS traces. Full details, trust boundaries and limitations: **[docs/blockchain.md](docs/blockchain.md)**.
+
+---
+
 ## How the engine works
 
-All mutations run inside `better-sqlite3` transactions.
+All mutations run inside PostgreSQL transactions (`withTransaction` in `lib/db.ts`).
 
 1. **Matching** — each pharmacy is scored
    `0.4·(1/distance_km) + 0.3·stock_confidence + 0.2·response_score + 0.1·fulfilment_history`

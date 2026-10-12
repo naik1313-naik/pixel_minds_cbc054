@@ -20,7 +20,16 @@ export type MediEvent =
   | { type: "request"; requestId: number; status: string }
   | { type: "delivery"; deliveryId: number; requestId: number; status: string }
   | { type: "location"; deliveryId: number; lat: number; lng: number; heading: number | null }
-  | { type: "inventory"; pharmacyId: number };
+  | { type: "inventory"; pharmacyId: number }
+  // Blockchain audit layer. Payloads stay small and carry no customer data:
+  // only opaque references, statuses and transaction hashes.
+  | { type: "blockchain.status.updated"; ready: boolean }
+  | { type: "batch.registered"; batchId: number; batchRef: string; txHash: string | null }
+  | { type: "batch.revoked"; batchId: number; batchRef: string; txHash: string | null }
+  | { type: "transfer.initiated"; transferId: number; status: string; txHash: string | null }
+  | { type: "transfer.confirmed"; transferId: number; status: string; txHash: string | null }
+  | { type: "delivery.milestone.recorded"; deliveryId: number; milestone: string; txHash: string | null }
+  | { type: "blockchain.operation.failed"; entityType: string; entityId: number; operationId: number };
 
 export function publish(channel: string, event: MediEvent): void {
   bus().emit(channel, event);
@@ -40,4 +49,5 @@ export const channels = {
   delivery: (id: number) => `delivery:${id}`,
   pharmacy: (id: number) => `pharmacy:${id}`,
   admin: "admin",
+  blockchain: "blockchain",
 };
