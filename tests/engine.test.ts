@@ -12,6 +12,7 @@ import {
   setLockSeconds,
   findSubstitutes,
   listRequests,
+  RequestValidationError,
 } from "@/lib/engine";
 import { REQUEST_STATUS } from "@/lib/constants";
 
@@ -149,6 +150,112 @@ describe("request lifecycle", () => {
     // idempotent: second sweep does nothing new
     expect(await sweepExpired()).toBe(0);
     await setLockSeconds(1800);
+  });
+
+  it("routes the request to the pharmacy the customer picked", async () => {
+    const target = (await queryOne<{ id: number }>(
+      "SELECT id FROM pharmacies WHERE verification_status = 'verified' ORDER BY id LIMIT 1"
+    ))!;
+    const { requestId } = await createRequest({
+      medicineId: 1,
+      qty: 2,
+      customerId: null,
+      customerName: "Directed",
+      fulfilmentType: "pickup",
+      preferredPharmacyId: target.id,
+    });
+    const detail = (await getRequestDetail(requestId))!;
+    expect(detail.request.preferred_pharmacy_id).toBe(target.id);
+    // The chosen pharmacy's owner sees it in their console.
+    const visible = await listRequests({ pharmacyId: target.id });
+    expect(visible.map((r) => r.id)).toContain(requestId);
+  });
+
+  it("serves the customer's pharmacy first even when it ranks lower", async () => {
+    const target = (await queryOne<{ id: number }>(
+      "SELECT id FROM pharmacies WHERE verification_status = 'verified' ORDER BY id LIMIT 1"
+    ))!;
+    // Give the chosen pharmacy a small slice of a scarce medicine (medicine 20
+    // has only 2 units network-wide) so auto-ranking would not pick it.
+    await queryRun(
+      `INSERT INTO inventory (pharmacy_id, medicine_id, qty_total, qty_locked)
+       VALUES ($1, 20, 2, 0)
+       ON CONFLICT (pharmacy_id, medicine_id)
+       DO UPDATE SET qty_total = 2, qty_locked = 0`,
+      [target.id]
+    );
+    await queryRun(
+      "UPDATE inventory SET qty_total = 0, qty_locked = 0 WHERE pharmacy_id <> $1 AND medicine_id = 20",
+      [target.id]
+    );
+    const { requestId } = await createRequest({
+      medicineId: 20,
+      qty: 2,
+      customerId: null,
+      customerName: "Directed",
+      fulfilmentType: "pickup",
+      preferredPharmacyId: target.id,
+    });
+    const detail = (await getRequestDetail(requestId))!;
+    expect(detail.request.preferred_pharmacy_id).toBe(target.id);
+    expect(detail.request.secured_qty).toBe(2);
+  });
+
+  it("still delivers a directed request when the chosen pharmacy has no stock", async () => {
+    const target = (await queryOne<{ id: number }>(
+      "SELECT id FROM pharmacies WHERE verification_status = 'verified' ORDER BY id LIMIT 1"
+    ))!;
+    // Medicine 3 is out of stock network-wide in the seed.
+    const { requestId } = await createRequest({
+      medicineId: 3,
+      qty: 2,
+      customerId: null,
+      customerName: "Directed",
+      fulfilmentType: "pickup",
+      preferredPharmacyId: target.id,
+    });
+    const detail = (await getRequestDetail(requestId))!;
+    // Routed to the chosen owner instead of being dropped as a lost sale.
+    expect(detail.request.preferred_pharmacy_id).toBe(target.id);
+    expect(detail.request.status).toBe(REQUEST_STATUS.SOURCING);
+    expect(await listRequests({ pharmacyId: target.id })).toHaveLength(1);
+    const lost = await queryOne<{ c: number }>("SELECT COUNT(*)::int AS c FROM lost_sales");
+    expect(lost!.c).toBe(0);
+
+    // Once the owner restocks, they can confirm it.
+    await queryRun(
+      "INSERT INTO inventory (pharmacy_id, medicine_id, qty_total, qty_locked) VALUES ($1, 3, 5, 0)",
+      [target.id]
+    );
+    const owner = await ownerOf(target.id);
+    expect((await confirmRequest(requestId, { userId: owner.id, role: owner.role })).ok).toBe(true);
+  });
+
+  it("marks an undirected out-of-stock request as a lost sale", async () => {
+    const { requestId } = await createRequest({
+      medicineId: 3,
+      qty: 2,
+      customerId: null,
+      customerName: "Undirected",
+      fulfilmentType: "pickup",
+    });
+    expect((await getRequestDetail(requestId))!.request.status).toBe(REQUEST_STATUS.UNAVAILABLE);
+    const lost = await queryOne<{ c: number }>("SELECT COUNT(*)::int AS c FROM lost_sales");
+    expect(lost!.c).toBe(1);
+  });
+
+  it("rejects a preferred pharmacy that is not verified", async () => {
+    await queryRun("UPDATE pharmacies SET verification_status = 'pending' WHERE id = 1");
+    await expect(
+      createRequest({
+        medicineId: 1,
+        qty: 1,
+        customerId: null,
+        customerName: "Test",
+        fulfilmentType: "pickup",
+        preferredPharmacyId: 1,
+      })
+    ).rejects.toBeInstanceOf(RequestValidationError);
   });
 
   it("suggests substitutes sharing the same salt", async () => {

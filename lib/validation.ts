@@ -50,6 +50,9 @@ export const createRequestSchema = z.object({
   medicineId: z.number().int().positive(),
   qty: z.number().int().min(1).max(50),
   fulfilmentType: z.enum(["pickup", "delivery"]).default("pickup"),
+  // Customer's explicit pharmacy choice. The request is routed to this
+  // pharmacy's owner instead of being auto-ranked across the network.
+  preferredPharmacyId: z.number().int().positive().optional(),
   deliveryAddress: z.string().max(200).optional(),
   deliveryLat: z.number().min(-90).max(90).optional(),
   deliveryLng: z.number().min(-180).max(180).optional(),
@@ -59,6 +62,10 @@ export const inventoryUpdateSchema = z.object({
   medicineId: z.number().int().positive(),
   qtyTotal: z.number().int().min(0).max(100000),
   expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+export const inventoryDeleteSchema = z.object({
+  medicineId: z.number().int().positive(),
 });
 
 export const locationSchema = z.object({

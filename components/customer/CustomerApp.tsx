@@ -49,6 +49,12 @@ interface RequestRow {
   created_at: string;
   pharmacy_name: string | null;
 }
+interface PharmacyOption {
+  id: number;
+  name: string;
+  address: string;
+  verification_status: string;
+}
 
 export default function CustomerApp({ customerName }: { customerName: string }) {
   const router = useRouter();
@@ -61,8 +67,19 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
   const [type, setType] = useState<"pickup" | "delivery">("pickup");
   const [address, setAddress] = useState("12, 100ft Road, Indiranagar, Bengaluru");
   const [focusedPharmacy, setFocusedPharmacy] = useState<number | null>(null);
+  const [pharmacies, setPharmacies] = useState<PharmacyOption[]>([]);
+  const [chosenPharmacy, setChosenPharmacy] = useState<number | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Every verified pharmacy in the network, including ones registered after the
+  // demo data was seeded, so a customer can always pick a specific store.
+  useEffect(() => {
+    api
+      .get<{ pharmacies: PharmacyOption[] }>("/api/pharmacies")
+      .then((r) => setPharmacies((r.pharmacies ?? []).filter((p) => p.verification_status === "verified")))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api.get<{ medicines: Medicine[] }>("/api/medicines").then((r) => setMedicines(r.medicines)).catch(() => {});
@@ -72,6 +89,7 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
   useEffect(() => {
     if (selected == null) return;
     setFocusedPharmacy(null);
+    setChosenPharmacy("");
     api.get<Detail>(`/api/medicines/${selected}`).then(setDetail).catch(() => setDetail(null));
   }, [selected]);
 
@@ -97,6 +115,7 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
           medicineId: selected,
           qty,
           fulfilmentType: type,
+          preferredPharmacyId: chosenPharmacy === "" ? undefined : chosenPharmacy,
           deliveryAddress: type === "delivery" ? address : undefined,
           deliveryLat: type === "delivery" ? 12.9719 : undefined,
           deliveryLng: type === "delivery" ? 77.6412 : undefined,
@@ -197,24 +216,51 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
                 </div>
 
                 <div className="mt-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Pharmacies stocking this
+                    </p>
+                    {chosenPharmacy !== "" && (
+                      <button
+                        type="button"
+                        onClick={() => setChosenPharmacy("")}
+                        className="text-xs text-teal-600 hover:underline"
+                      >
+                        Clear selection
+                      </button>
+                    )}
+                  </div>
                   {detail.pharmacies.slice(0, 5).map((p) => (
-                    <button
+                    <div
                       key={p.pharmacy_id}
-                      type="button"
-                      onClick={() => setFocusedPharmacy((cur) => (cur === p.pharmacy_id ? null : p.pharmacy_id))}
-                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition ${
-                        focusedPharmacy === p.pharmacy_id
+                      className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 transition ${
+                        chosenPharmacy === p.pharmacy_id
                           ? "border-teal-400 bg-teal-50/70 ring-1 ring-teal-200"
                           : "border-slate-100 hover:bg-slate-50"
                       }`}
                     >
-                      <span className="flex items-center gap-2 text-sm text-slate-700">
-                        <Store className="h-4 w-4 text-slate-400" /> {p.pharmacy_name}
-                      </span>
-                      <span className="text-xs text-slate-500">
-                        {p.free} free · {p.distance_km} km · score {p.score}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => setFocusedPharmacy((cur) => (cur === p.pharmacy_id ? null : p.pharmacy_id))}
+                        className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
+                      >
+                        <span className="flex min-w-0 items-center gap-2 text-sm text-slate-700">
+                          <Store className="h-4 w-4 shrink-0 text-slate-400" />
+                          <span className="truncate">{p.pharmacy_name}</span>
+                        </span>
+                        <span className="shrink-0 text-xs text-slate-500">
+                          {p.free} free · {p.distance_km} km
+                        </span>
+                      </button>
+                      <Button
+                        variant="ghost"
+                        onClick={() =>
+                          setChosenPharmacy((cur) => (cur === p.pharmacy_id ? "" : p.pharmacy_id))
+                        }
+                      >
+                        {chosenPharmacy === p.pharmacy_id ? "Selected" : "Request here"}
+                      </Button>
+                    </div>
                   ))}
                   {detail.pharmacies.length === 0 && <p className="text-sm text-rose-500">Currently unavailable anywhere in the network.</p>}
                 </div>
@@ -223,6 +269,34 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
               <Card className="p-5">
                 <h3 className="font-semibold text-slate-900">Request this medicine</h3>
                 {error && <div className="mt-3"><Alert><span>{error}</span></Alert></div>}
+                <div className="mt-3">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Request from pharmacy
+                    </span>
+                    <select
+                      value={chosenPharmacy}
+                      onChange={(e) => setChosenPharmacy(e.target.value === "" ? "" : Number(e.target.value))}
+                      className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-100"
+                    >
+                      <option value="">Auto — let MediMesh pick the best nearby</option>
+                      {pharmacies.map((p) => {
+                        const stock = detail.pharmacies.find((s) => s.pharmacy_id === p.id);
+                        return (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                            {stock ? ` · ${stock.free} in stock` : " · out of stock"}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {chosenPharmacy === ""
+                      ? "We route this to the highest-scoring pharmacy near you."
+                      : `This request goes straight to ${pharmacies.find((p) => p.id === chosenPharmacy)?.name ?? "the selected pharmacy"}.`}
+                  </p>
+                </div>
                 <div className="mt-3 grid grid-cols-2 gap-3">
                   <label className="block">
                     <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Quantity</span>
@@ -252,9 +326,20 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
                     <Input label="Delivery address" value={address} onChange={(e) => setAddress(e.target.value)} />
                   </div>
                 )}
-                <Button className="mt-4 w-full" loading={busy} onClick={createRequest} disabled={detail.total_free === 0}>
+                <Button
+                  className="mt-4 w-full"
+                  loading={busy}
+                  onClick={createRequest}
+                  disabled={detail.total_free === 0 && chosenPharmacy === ""}
+                >
                   <Truck className="h-4 w-4" /> Request {qty} × {detail.medicine.name}
                 </Button>
+                {detail.total_free === 0 && chosenPharmacy === "" && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Nothing is in stock across the network. Pick a specific pharmacy above to send them the
+                    request anyway.
+                  </p>
+                )}
                 {detail.substitutes.length > 0 && (
                   <p className="mt-3 text-xs text-slate-500">
                     Substitutes sharing the salt:{" "}

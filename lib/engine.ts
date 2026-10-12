@@ -20,6 +20,14 @@ import { recordAudit } from "./audit";
 import { publish, channels } from "./sse";
 import { createDeliveryForRequest, getDeliveryForRequest } from "./delivery";
 
+/** Thrown for client-fixable problems in a request; surfaces as HTTP 400. */
+export class RequestValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RequestValidationError";
+  }
+}
+
 export interface Pharmacy {
   id: number;
   name: string;
@@ -287,6 +295,8 @@ export interface CreateRequestInput {
   deliveryLat?: number;
   deliveryLng?: number;
   area?: string;
+  /** Customer's explicit pharmacy choice; takes priority over auto-ranking. */
+  preferredPharmacyId?: number | null;
   idempotencyKey?: string;
 }
 
@@ -302,17 +312,31 @@ export async function createRequest(input: CreateRequestInput) {
   if (!medicine) throw new Error("Unknown medicine");
   const qty = Math.max(1, Math.min(50, Math.floor(input.qty)));
 
+  // A customer may point the request at any specific pharmacy (including a
+  // freshly registered one with no stock yet). It must exist and be verified,
+  // otherwise the request would never reach an owner.
+  let preferredPharmacyId: number | null = null;
+  if (input.preferredPharmacyId != null) {
+    const chosen = await queryOne<{ id: number }>(
+      "SELECT id FROM pharmacies WHERE id = $1 AND verification_status = 'verified'",
+      [input.preferredPharmacyId]
+    );
+    if (!chosen) throw new RequestValidationError("Selected pharmacy is not available");
+    preferredPharmacyId = chosen.id;
+  }
+
   const requestId = await withTransaction(async (tx) => {
     const row = await tx.one<{ id: number }>(
       `INSERT INTO requests (customer_id, customer_name, medicine_id, qty, preferred_pharmacy_id,
            fulfilment_type, delivery_address, delivery_lat, delivery_lng, status, idempotency_key, created_at)
-         VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10, $11)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id`,
       [
         input.customerId,
         input.customerName,
         input.medicineId,
         qty,
+        preferredPharmacyId,
         input.fulfilmentType,
         input.deliveryAddress ?? null,
         input.deliveryLat ?? null,
@@ -345,6 +369,7 @@ export async function sourceRequest(requestId: number): Promise<void> {
     fulfilment_type: string;
     delivery_lat: number | null;
     delivery_lng: number | null;
+    preferred_pharmacy_id: number | null;
   }>("SELECT * FROM requests WHERE id = $1", [requestId]);
   if (!req || req.status !== REQUEST_STATUS.REQUESTED) return;
   const medicine = (await getMedicine(req.medicine_id))!;
@@ -353,14 +378,26 @@ export async function sourceRequest(requestId: number): Promise<void> {
       ? { lat: req.delivery_lat, lng: req.delivery_lng }
       : CUSTOMER_LOCATION;
 
-  const ranked = await rankPharmacies(req.medicine_id, req.qty, origin);
+  const rankedAll = await rankPharmacies(req.medicine_id, req.qty, origin);
+  const chosenPharmacyId: number | null = req.preferred_pharmacy_id ?? null;
+
+  // A customer-selected pharmacy is served first; the rest of the network is
+  // still used to top up any shortfall.
+  const ranked = chosenPharmacyId
+    ? [
+        ...rankedAll.filter((r) => r.pharmacy.id === chosenPharmacyId),
+        ...rankedAll.filter((r) => r.pharmacy.id !== chosenPharmacyId),
+      ]
+    : rankedAll;
   const lockSeconds = await getLockSeconds();
   const expires = new Date(Date.now() + lockSeconds * 1000).toISOString();
 
   const { preferred, status } = await withTransaction(async (tx) => {
     let needed = req.qty;
     let secured = 0;
-    let preferred: number | null = null;
+    // Honour the customer's choice as the primary pharmacy even before any
+    // stock is locked, so the request reaches that pharmacy's owner.
+    let preferred: number | null = chosenPharmacyId;
     let preferredQty = 0;
 
     for (const r of ranked) {
@@ -375,7 +412,9 @@ export async function sourceRequest(requestId: number): Promise<void> {
       );
       needed -= take;
       secured += take;
-      if (take > preferredQty) {
+      // A customer-picked pharmacy always stays primary; otherwise the
+      // pharmacy that contributed the most units wins.
+      if (preferred == null && take > preferredQty) {
         preferredQty = take;
         preferred = r.pharmacy.id;
       }
@@ -383,11 +422,20 @@ export async function sourceRequest(requestId: number): Promise<void> {
 
     let status: string;
     if (secured === 0) {
-      status = REQUEST_STATUS.UNAVAILABLE;
-      await tx.run(
-        "INSERT INTO lost_sales (medicine_id, pharmacy_id, qty, value, created_at) VALUES ($1, NULL, $2, $3, $4)",
-        [req.medicine_id, req.qty, medicine.price_paise * req.qty, nowIso()]
-      );
+      if (chosenPharmacyId) {
+        // Directed request: the customer asked this pharmacy specifically, so
+        // hand it to the owner even with no stock yet (they can restock and
+        // confirm). Not a lost sale.
+        status = medicine.rx_required
+          ? REQUEST_STATUS.NEEDS_VERIFICATION
+          : REQUEST_STATUS.SOURCING;
+      } else {
+        status = REQUEST_STATUS.UNAVAILABLE;
+        await tx.run(
+          "INSERT INTO lost_sales (medicine_id, pharmacy_id, qty, value, created_at) VALUES ($1, NULL, $2, $3, $4)",
+          [req.medicine_id, req.qty, medicine.price_paise * req.qty, nowIso()]
+        );
+      }
     } else if (secured < req.qty) {
       status = REQUEST_STATUS.PARTIAL;
     } else {

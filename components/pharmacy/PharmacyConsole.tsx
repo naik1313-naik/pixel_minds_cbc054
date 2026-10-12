@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Boxes, ClipboardList, RefreshCw, Truck, Wallet } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Boxes, ClipboardList, Plus, RefreshCw, Trash2, Truck, Wallet } from "lucide-react";
 import { Badge, Button, Card, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
 
@@ -26,6 +26,13 @@ interface InventoryRow {
   qty_locked: number;
   free: number;
   expiry_date: string | null;
+}
+interface CatalogItem {
+  medicine_id: number;
+  medicine_name: string;
+  salt: string;
+  price_paise: number;
+  rx_required: number;
 }
 interface LedgerRow {
   id: number;
@@ -63,6 +70,7 @@ export default function PharmacyConsole({
   const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("requests");
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [busy, setBusy] = useState<number | null>(null);
@@ -70,12 +78,13 @@ export default function PharmacyConsole({
   const load = useCallback(async () => {
     const [r, i, l, d] = await Promise.all([
       api.get<{ requests: RequestRow[] }>("/api/pharmacy/requests"),
-      api.get<{ inventory: InventoryRow[] }>("/api/pharmacy/inventory"),
+      api.get<{ inventory: InventoryRow[]; catalog: CatalogItem[] }>("/api/pharmacy/inventory"),
       api.get<{ ledger: LedgerRow[] }>("/api/pharmacy/ledger"),
       api.get<{ deliveries: DeliveryRow[] }>("/api/pharmacy/deliveries"),
     ]);
     setRequests(r.requests);
     setInventory(i.inventory);
+    setCatalog(i.catalog ?? []);
     setLedger(l.ledger);
     setDeliveries(d.deliveries);
   }, []);
@@ -109,6 +118,39 @@ export default function PharmacyConsole({
       await load();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Update failed", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function addStock(medicineId: number, qtyTotal: number, expiryDate: string) {
+    if (!medicineId) return toast("Pick a medicine first", "error");
+    if (qtyTotal < 1) return toast("Quantity must be at least 1", "error");
+    setBusy(medicineId);
+    try {
+      await api.put("/api/pharmacy/inventory", {
+        medicineId,
+        qtyTotal,
+        expiryDate: expiryDate || undefined,
+      });
+      toast("Stock added", "success");
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not add stock", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeStock(row: InventoryRow) {
+    if (!window.confirm(`Remove ${row.medicine_name} from your stock list?`)) return;
+    setBusy(row.medicine_id);
+    try {
+      await api.del("/api/pharmacy/inventory", { medicineId: row.medicine_id });
+      toast(`${row.medicine_name} removed`, "success");
+      await load();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not remove stock", "error");
     } finally {
       setBusy(null);
     }
@@ -192,24 +234,41 @@ export default function PharmacyConsole({
       )}
 
       {tab === "inventory" && (
-        <Card className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead className="border-b border-slate-100 text-left text-xs uppercase text-slate-400">
-              <tr>
-                <th className="p-3">Medicine</th>
-                <th className="p-3">Stock</th>
-                <th className="p-3">Locked</th>
-                <th className="p-3">Expiry</th>
-                <th className="p-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {inventory.map((row) => (
-                <InventoryRowEditor key={row.medicine_id} row={row} busy={busy === row.medicine_id} onSave={saveInventory} />
-              ))}
-            </tbody>
-          </table>
-        </Card>
+        <div className="space-y-4">
+          <AddStockForm catalog={catalog} listed={inventory} busy={busy} onAdd={addStock} />
+
+          <Card className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead className="border-b border-slate-100 text-left text-xs uppercase text-slate-400">
+                <tr>
+                  <th className="p-3">Medicine</th>
+                  <th className="p-3">Stock</th>
+                  <th className="p-3">Locked</th>
+                  <th className="p-3">Expiry</th>
+                  <th className="p-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {inventory.length === 0 && (
+                  <tr>
+                    <td className="p-6 text-center text-slate-400" colSpan={5}>
+                      No stock listed yet. Use “Add stock” above to list your first medicine.
+                    </td>
+                  </tr>
+                )}
+                {inventory.map((row) => (
+                  <InventoryRowEditor
+                    key={row.medicine_id}
+                    row={row}
+                    busy={busy === row.medicine_id}
+                    onSave={saveInventory}
+                    onDelete={removeStock}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
       )}
 
       {tab === "ledger" && (
@@ -269,14 +328,109 @@ export default function PharmacyConsole({
   );
 }
 
+function AddStockForm({
+  catalog,
+  listed,
+  busy,
+  onAdd,
+}: {
+  catalog: CatalogItem[];
+  listed: InventoryRow[];
+  busy: number | null;
+  onAdd: (medicineId: number, qty: number, expiry: string) => void;
+}) {
+  const listedIds = useMemo(() => new Set(listed.map((r) => r.medicine_id)), [listed]);
+  const available = useMemo(
+    () => catalog.filter((c) => !listedIds.has(c.medicine_id)),
+    [catalog, listedIds]
+  );
+  const [medicineId, setMedicineId] = useState<number | "">(available[0]?.medicine_id ?? "");
+  const [qty, setQty] = useState(10);
+  const [expiry, setExpiry] = useState("");
+  const [open, setOpen] = useState(false);
+
+  // Keep the selection valid as the catalog/list change.
+  const selectedId = listedIds.has(Number(medicineId)) ? "" : medicineId;
+  const adding = busy != null && busy === Number(selectedId);
+
+  function submit() {
+    const id = Number(selectedId);
+    onAdd(id, qty, expiry);
+    setExpiry("");
+  }
+
+  return (
+    <Card className="p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <span className="flex items-center gap-2 font-semibold text-slate-900">
+          <Plus className="h-4 w-4 text-teal-600" /> Add stock
+        </span>
+        <span className="text-sm text-slate-400">{open ? "Hide" : "Show"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-end">
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Medicine</span>
+            <select
+              value={selectedId}
+              onChange={(e) => setMedicineId(e.target.value === "" ? "" : Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+            >
+              <option value="">Select a medicine…</option>
+              {available.map((c) => (
+                <option key={c.medicine_id} value={c.medicine_id}>
+                  {c.medicine_name} · {c.salt}
+                  {c.rx_required ? " · Rx" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Quantity</span>
+            <input
+              type="number"
+              min={1}
+              value={qty}
+              onChange={(e) => setQty(Math.max(1, Number(e.target.value)))}
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Expiry</span>
+            <input
+              type="date"
+              value={expiry}
+              onChange={(e) => setExpiry(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm"
+            />
+          </label>
+          <Button loading={adding} disabled={!selectedId} onClick={submit}>Add</Button>
+          {available.length === 0 && (
+            <p className="text-xs text-slate-400 sm:col-span-4">
+              Every medicine in the network is already in your stock list.
+            </p>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function InventoryRowEditor({
   row,
   busy,
   onSave,
+  onDelete,
 }: {
   row: InventoryRow;
   busy: boolean;
   onSave: (row: InventoryRow, qty: number, expiry: string) => void;
+  onDelete: (row: InventoryRow) => void;
 }) {
   const [qty, setQty] = useState(row.qty_total);
   const [expiry, setExpiry] = useState(row.expiry_date ?? "");
@@ -304,8 +458,19 @@ function InventoryRowEditor({
           className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
         />
       </td>
-      <td className="p-3 text-right">
-        <Button variant="ghost" loading={busy} onClick={() => onSave(row, qty, expiry)}>Save</Button>
+      <td className="p-3">
+        <div className="flex items-center justify-end gap-1">
+          <Button variant="ghost" loading={busy} onClick={() => onSave(row, qty, expiry)}>Save</Button>
+          <Button
+            variant="danger"
+            loading={busy}
+            disabled={row.qty_locked > 0}
+            title={row.qty_locked > 0 ? "Units are locked against live requests" : "Remove from stock list"}
+            onClick={() => onDelete(row)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
       </td>
     </tr>
   );
