@@ -188,18 +188,101 @@ cannot silently succeed.
   **exactly one** legal step; replays and regressions revert
 - `getDeliveryState`, `hasMilestone`, `isDelivered`
 
+### Settlement audit (payments)
+- `recordSettlement(bytes32 settlementId, bytes32 orderRef, bytes32 settlementHash, uint256 amountPaise, address beneficiary)`
+  — append-only: a settlement reference can be anchored **once**; replays revert
+  with `SettlementAlreadyRecorded`. The beneficiary must hold `PHARMACY_ROLE`,
+  so a settlement can only ever be attributed to a pharmacy the contract has
+  authorized.
+- `getSettlement`, `settlementExists`
+- Rejects zero amounts, empty references and the zero address.
+
+> The contract stores **no value** and cannot see the payment rail. It records
+> that an authorized wallet *reported* a settlement of amount A for order B to
+> pharmacy C at time T. It is not a bank statement, and the UI must not present
+> it as one.
+
 ---
 
 ## 7. What is on-chain vs off-chain
 
 **On-chain:** opaque batch refs, metadata hashes, authorized wallet addresses,
-transfer lifecycle, milestone timestamps, opaque order-ref hashes, events.
+transfer lifecycle, milestone timestamps, opaque order-ref hashes, settlement
+ids / hashes / amounts, events.
 
 **Never on-chain:** customer names, phones, delivery addresses, prescriptions,
-payments, supplier invoices, GPS traces.
+gateway order or payment ids, bank or card details, supplier invoices, GPS
+traces.
 
 GPS updates stay off-chain and keep flowing to Leaflet. Only four meaningful
 milestones are anchored.
+
+---
+
+## 6b. Payments and settlement
+
+Money flows through Razorpay; the chain is an audit trail for it, never a rail.
+
+```
+pharmacy confirms order ─> payment intent (amount frozen server-side)
+customer pays ──────────> gateway captures, routing the pharmacy owner's
+                           share to their own linked account
+order fulfilled ─────────> payment PaidOut + settlement anchored on-chain
+```
+
+- **Amounts** are integer paise throughout. The order total is computed from the
+  catalogue price at confirm time — never from anything the client sends.
+- **Split**: `platform_fee = round(total × 0.05)`; the pharmacy receives
+  `total − fee`. Rounding happens once, so the two always reconstruct the total.
+- **Money never rests in a MediMesh balance** beyond the platform fee. Capture is
+  refused outright if the pharmacy has no activated payout account.
+- **Bank details** are entered on Razorpay's hosted onboarding page. This
+  database stores only the resulting account id and its status.
+- **Degradation is asymmetric on purpose**: a chain outage must not block a
+  delivery, so the settlement anchor is best-effort and retried by the
+  reconciliation job; a gateway outage *does* block capture, because taking money
+  without a record is worse than a delayed delivery.
+
+### Payment invariants (all covered by `tests/payments.test.ts`)
+- A payment intent is created once and reused — a retried "Pay now" cannot
+  double-charge.
+- A repeated checkout callback does not route money twice.
+- A forged checkout signature is rejected before any capture is attempted.
+- Both completion paths (pickup `completeRequest` and delivered
+  `finalizeDeliveredRequest`) settle idempotently, via a guarded
+  `UPDATE … WHERE status = 'Captured'`.
+- Cancelling refunds a captured payment and closes an uncaptured one without
+  calling the gateway.
+- The merchant key secret never appears in any API payload.
+
+---
+
+## 6c. Verifying a settlement publicly
+
+`/verify/settlement/<settlementRef>` — unauthenticated by design, because the point of anchoring is
+that a customer or a third party can check it themselves.
+
+Three independent checks, so the page never merely restates our database:
+
+1. `hashRef(settlementRef)` resolves to a settlement present on-chain.
+2. The on-chain `settlementHash` is compared against a hash **recomputed** from
+   `payment_audit.metadata_json`. This is what makes "record unaltered" a proof rather than a claim,
+   and it is why the canonical metadata is stored rather than only its hash.
+3. The displayed amount and beneficiary come from the chain, so editing a local row cannot change what
+   the page reports.
+
+Outcomes, and the wording each one is allowed to use:
+
+| Status | Says |
+|---|---|
+| `SETTLED` | Reported by an authorized pharmacy wallet, record unaltered — **and** that this does not prove a bank transfer |
+| `MISMATCH` | Disputed; do not rely on it, escalate to the pharmacy |
+| `NOT_FOUND` | No such record — explicitly *not* evidence a pharmacy withheld payment |
+| `PENDING` | Recorded locally, chain anchor not confirmed yet (usually a dead RPC) |
+| `UNAVAILABLE` | Could not reach the chain |
+
+A verification surface that only ever prints a green tick becomes marketing. Every success carries its
+own limit.
 
 ---
 
@@ -284,3 +367,10 @@ regressions from this integration.
 5. Milestones are anchored when reported, not when physically observed.
 6. The demo wallet mapping is pharmacy-id based (`1..8`), matching the seed data.
    A pharmacy with an id above 8 has no mapped wallet and gets a clear error.
+7. **A settlement anchor does not prove a bank transfer happened.** It proves an
+   authorized pharmacy wallet reported the settlement and that the record has not
+   changed since. The payment gateway, not the chain, is the evidence of money.
+8. **Webhook reliability depends on `MM_RAZORPAY_WEBHOOK_SECRET`.** Without it
+   `/api/webhooks/razorpay` rejects every request. The browser callback is a
+   convenience only — a customer who closes the tab still gets captured, but
+   only once a webhook is configured.

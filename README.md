@@ -79,6 +79,13 @@ use the e2e/acceptance helpers which compute codes automatically.
 | `SESSION_PEPPER` | HMAC pepper for session-token hashing. **Required in production.** |
 | `MM_KYC_ENDPOINT` | If set, document checks are routed to a real KYC/eKYC gateway (POST JSON) instead of the offline demo provider. |
 | `MM_KYC_API_KEY` | Bearer token sent to `MM_KYC_ENDPOINT`. |
+| `MM_SMS_ENDPOINT` | Optional HTTP gateway for outbound notifications (job offers, assignments, refunds). Falls back to printing in the terminal. |
+| `MM_SMS_API_KEY` | Bearer token sent to `MM_SMS_ENDPOINT`. |
+| `MM_RAZORPAY_KEY_ID` | Merchant key id. When both Razorpay keys are set, live Razorpay is used; otherwise a deterministic demo gateway runs. Server-only. |
+| `MM_RAZORPAY_KEY_SECRET` | Merchant key secret. Never sent to the browser; also enables the local demo checkout signature helper. |
+| `MM_RAZORPAY_WEBHOOK_SECRET` | Verifies `x-razorpay-signature` on `/api/webhooks/razorpay`. **Required in production** or every webhook is rejected. |
+| `NEXT_PUBLIC_RAZORPAY_KEY_ID` | Publishable key id — the only payment value safe in the browser. |
+| `NEXT_PUBLIC_BLOCK_EXPLORER_URL` | Optional block explorer used to link settlement receipts. |
 
 ### Secrets
 
@@ -92,13 +99,20 @@ No secret is hard-coded. In development, `requireSecret()` auto-generates missin
 
 ```
 pharmacies(id, name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count,
-           licence_verified, licence_checked_at, licence_meta_json)
+           licence_verified, licence_checked_at, licence_meta_json,
+           razorpay_account_id, payout_account_status, payout_account_checked_at)
 medicines(id, name, salt, price_paise, rx_required)
 inventory(pharmacy_id, medicine_id, qty_total, qty_locked, expiry_date)
 requests(id, customer_id, customer_name, medicine_id, qty, secured_qty, preferred_pharmacy_id,
          fulfilment_type, delivery_address, delivery_lat, delivery_lng, status, rx_verified,
-         substitute_for_id, idempotency_key, created_at)
+         substitute_for_id, idempotency_key, amount_paise, platform_fee_paise, payment_status, created_at)
 reservations(id, request_id, pharmacy_id, qty, lock_expires_at, status, kind)
+payments(id, request_id, customer_id, pharmacy_id, amount_paise, platform_fee_paise,
+         pharmacy_amount_paise, currency, gateway, status, razorpay_order_id, razorpay_payment_id,
+         razorpay_transfer_id, beneficiary_account_id, captured_at, paid_out_at, refunded_at, settled_at)
+payment_audit(id, payment_id, settlement_ref, settlement_ref_hash, order_ref, order_ref_hash,
+              amount_paise, metadata_hash, metadata_json, gateway_ref_hash, beneficiary_wallet,
+              status, tx_hash, block_number)
 ledger(id, from_pharmacy_id, to_pharmacy_id, medicine_id, qty, wholesale_amount, platform_fee, created_at)
 lost_sales(id, medicine_id, area, qty, value, created_at)
 demand_events(id, medicine_id, area, qty, created_at)
@@ -139,7 +153,7 @@ offline.
 npm run chain:install     # once
 npm run chain:node        # terminal 1 — http://127.0.0.1:8545
 npm run chain:compile     # terminal 2
-npm run chain:test        # 43 contract tests
+npm run chain:test        # 50 contract tests
 npm run chain:deploy      # writes blockchain/deployments/local.json
 npm run abi:generate      # refreshes lib/blockchain/abi.generated.json
 npm run dev               # terminal 3
@@ -153,10 +167,169 @@ End-to-end verification against the live local chain:
 ```bash
 npm run smoke:blockchain  # 32 checks
 npm run smoke:delivery    # 12 checks
+npm run smoke:payments    # 15 checks — order → pay → payout → chain → QR → refund → outbox
+npm run smoke:delivery-assign  # 14 checks — delivery job → offer → rider → approval → contact
+npm run screenshots       # captures every demo screen into demo-assets/screenshots/
 ```
 
 Only opaque references and hashes go on-chain — never customer names, addresses, prescriptions or
 GPS traces. Full details, trust boundaries and limitations: **[docs/blockchain.md](docs/blockchain.md)**.
+
+---
+
+## Hardening: rate limits, refunds, outbox
+
+**Rate limiting.** `login` (20/min per IP, 8/min per account), `2fa` (6 attempts per
+challenge) and `payment/verify` (15/min) are throttled *before* any credential
+comparison or gateway call, with `429` and a `Retry-After` header. A 6-digit code
+is the weakest credential in the system and gets the tightest limit. This slows
+guessing down; it is not the security boundary, and the code says so.
+
+**Refunds and disputes.** A pharmacy or admin can refund a payment **while the
+money is still ours to return** — captured but not yet paid out. Once the payout
+has been released, the route refuses with a clear reason rather than half-
+performing: reversing a settled payment is money owed in the *opposite*
+direction, which needs a person and a dispute, not a button. That guard lives in
+the domain function, not the route, because the refund path has more than one
+caller. Refunds are idempotent, and the customer is notified.
+
+**Write outbox (admin).** Every blockchain write is persisted before submission,
+so a crash leaves a row rather than a mystery. That guarantee is invisible unless
+somebody can see the queue, so the admin console has a **Write outbox** tab:
+unresolved count, in-flight, failed, settlement gaps, confirmed, plus a
+**Reconcile** action that reads the chain for what actually happened and never
+re-submits. When the RPC is down it says so instead of showing a false clean
+bill of health.
+
+**Notifications.** Rides and payments are no longer silent. A rider is told when
+a job is offered, and both rider and customer are told when the pharmacy approves
+the assignment. Notifications go through a swappable provider (console by
+default, an HTTP gateway via `MM_SMS_ENDPOINT`) and are deliberately
+best-effort — a notification failure never rolls back or blocks the operation it
+was describing, which is exactly why it is separate from the OTP channel.
+
+**Receipt QR.** Every settled payment gets a QR that encodes the *public
+verification URL* and nothing else, so a customer can carry it away and a
+stranger can scan it. It appears only once there is something on-chain to point
+at.
+
+---
+
+## Operator view & customer↔rider contact
+
+**Admin → Orders tab.** Every order on one row with all three parties joined:
+who ordered it, which pharmacy is fulfilling it, which rider has it, and how
+much was routed to the pharmacy. The list updates live over SSE, because during
+an incident the operator should not be guessing whether to press refresh.
+
+Customer contact details are deliberately **not** in that table. An operator needs
+to resolve an order, not browse the patient list.
+
+**Customer → "Your rider".** On a delivery order the customer can see and reach
+the rider carrying it — **Call** (`tel:`) and **Text** (`sms:` with a prefilled
+body), which hand off to the phone's own dialer and messaging app.
+
+The rider's number starts masked (`XXXXXX0001`). It is released only when the
+customer taps "Show number", only to the customer who placed that order (or the
+fulfilling pharmacy / an admin), only once a rider is actually assigned, and
+**every disclosure is written to the audit log** as `contact.phone_revealed`. A
+`tel:` link the customer cannot see until they ask is the point; a page that
+preloads every rider's number is not a feature.
+
+---
+
+## Demo mode: one-tap sign-in
+
+Every seeded demo user has 2FA enabled, which makes a live walkthrough painful — the operator has to
+read a TOTP code off another screen while a judge watches. In a non-production build the **login
+page lists the demo personas as buttons**: Asha (customer), Apollo Pharmacy (owner), Kiran (rider),
+Demo Admin, and a few more. One tap signs you in, password and second factor included.
+
+Three things keep this from being a hole:
+
+1. `NODE_ENV=production` wins over every env var — `DEMO_MODE=1` cannot switch demo mode on in a
+   deployed environment, and the route returns 404 there.
+2. Only `@medimesh.demo` accounts are eligible, so a genuinely registered user can never be
+   impersonated, even in demo mode.
+3. Every bypass is written to the audit log as `auth.demo_login`, so the security log does not
+   quietly become fiction.
+
+If the database has not been seeded yet, the buttons simply do not appear rather than failing on
+click.
+
+```bash
+npm run db:migrate      # apply schema changes without restarting the dev server
+npm run smoke:payments  # walk the whole demo flow end to end against a running server
+```
+
+`smoke:payments` exercises the exact path a judge sees: one-tap sign-in as the customer, order,
+one-tap sign-in as the owner, link payout account, confirm, pay, fulfil, then read the payout and the
+on-chain settlement receipt back. Ten checks.
+
+> Schema note: a column added after a table first shipped must be declared with
+> `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, not inline in the `CREATE TABLE`. `CREATE TABLE IF NOT
+> EXISTS` is a no-op on an existing table, so an inline addition never reaches a deployed database —
+> and the failure only shows up at runtime, mid-demo.
+
+---
+
+## Payments & settlements
+
+Customers pay through **Razorpay** and the pharmacy owner is credited **directly to their own linked
+account** at capture time — only the platform fee (5%) is retained. Funds never rest in a MediMesh
+balance. Bank details are entered on Razorpay's hosted onboarding page and are never stored here.
+
+```bash
+# Optional: without these the app runs a deterministic demo gateway,
+# so order -> pay -> settle -> on-chain-record works offline.
+MM_RAZORPAY_KEY_ID=rzp_live_...
+MM_RAZORPAY_KEY_SECRET=...
+MM_RAZORPAY_WEBHOOK_SECRET=...      # required in production
+NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_live_...
+```
+
+Flow:
+
+1. The pharmacy **confirms** an order → the total is frozen server-side from the catalogue price and a
+   payment intent opens.
+2. The customer pays. Checkout is verified server-side (HMAC over `order_id|payment_id`, compared in
+   constant time) before anything is captured — a forged callback cannot create a charge.
+3. Capture routes the pharmacy owner's share to their linked account.
+4. When the order is **fulfilled** (pickup collected, or delivery handed over with OTP + geofence), the
+   payment is marked `PaidOut` and the settlement is anchored on-chain.
+
+Anchoring is append-only: a settlement reference can be recorded once, the beneficiary must hold
+`PHARMACY_ROLE`, and the receipt reads back the same metadata hash it was written with.
+
+> **Scope of the anchor.** It proves an authorized pharmacy wallet *reported* the settlement and that
+> the record has not changed. It is not a bank statement — the gateway is the evidence of money. A
+> chain outage never blocks a delivery; it only defers the anchor, which the reconcile job picks up.
+
+### Public settlement verification
+
+Every payout gets an opaque reference (`SET-XXXX-XXXX-XXXX-XXXXXXXX`) and a **public, unauthenticated**
+verification page:
+
+```
+/verify/settlement/SET-XXXX-XXXX-XXXX-XXXXXXXX
+```
+
+Anyone can open it — a customer, a regulator, or someone on their own phone — with no account. The page
+runs three independent checks rather than restating our database:
+
+1. the reference hashes to a settlement that exists on-chain;
+2. the on-chain metadata hash equals a hash **recomputed in the browser request** from the stored
+   canonical metadata — so "record unaltered" is proven, not claimed;
+3. the on-chain amount and beneficiary are what gets displayed, so editing a local row cannot change
+   what the page reports.
+
+If the chain record disagrees with the stored metadata, the page says **Disputed — do not rely on this**
+and tells the viewer to escalate rather than pay out. If the reference is unknown, it says exactly that,
+and explicitly notes this is *not* evidence that a pharmacy withheld a payment. If the RPC is down it
+reports "Chain unavailable" — never a negative claim about anyone's honesty.
+
+No patient identity is published there or stored on-chain. A pharmacy's name and wallet appear because
+that is what a settlement must be attributable to.
 
 ---
 
@@ -273,12 +446,13 @@ ID (DL or a Verhoeff-valid Aadhaar), so the admin console shows green document b
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (next/core-web-vitals)
-npm test            # vitest — engine, delivery, auth, security, identity/providers (62 tests)
+npm test            # vitest — engine, delivery, auth, security, identity/providers, payments, demo-login, contact/admin, enhancements, blockchain (173 tests)
 npm run acceptance  # end-to-end API script (needs a running server: BASE=http://localhost:3000)
 npm run e2e:install # one-time: download Chromium for Playwright
 npm run e2e         # Playwright e2e, desktop + mobile
 npm run build       # production build
 npm run db:inspect  # print migrations, row counts, pharmacy/partner verification
+npm run db:migrate  # apply schema.sql now (idempotent; no restart needed)
 npm run db:reset    # delete the DB so the next app start reseeds it
 ```
 

@@ -22,8 +22,11 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 5"] } },
   ],
   webServer: {
+    // The reset runs before `next dev`, because Playwright starts the server
+    // before globalSetup — resetting afterwards would drop the schema underneath
+    // a live connection pool.
     command:
-      "rm -rf .e2e-data && DATABASE_URL=postgresql://localhost/medimesh_e2e DATABASE_SSL=false MM_DATA_DIR=.e2e-data DEMO_MODE=1 MM_QUIET=1 npx next dev -p " +
+      "node scripts/e2e-reset.mjs && rm -rf .e2e-data && DATABASE_URL=postgresql://localhost/medimesh_e2e DATABASE_SSL=false MM_DATA_DIR=.e2e-data DEMO_MODE=1 MM_QUIET=1 npx next dev -p " +
       PORT,
     url: BASE_URL,
     reuseExistingServer: false,

@@ -76,6 +76,18 @@ export function totp(secret: string): string {
 export async function loginAs(page: Page, email: string, expectedPath: string) {
   const cred = credentialFor(email);
   await page.goto("/login");
+
+  // In a demo build the login page leads with one-tap personas and hides the
+  // credential form behind a toggle. These tests deliberately exercise the real
+  // password + TOTP path, so open it first. The persona list is fetched on mount,
+  // so the toggle appears a beat after load — wait for it rather than assume.
+  const toggle = page.getByRole("button", { name: /sign in with email and password/i });
+  const appeared = await toggle
+    .waitFor({ state: "visible", timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (appeared) await toggle.click();
+
   await page.getByLabel("Email").fill(cred.email);
   await page.getByLabel("Password").fill(cred.password);
   await page.getByRole("button", { name: "Sign in" }).click();
