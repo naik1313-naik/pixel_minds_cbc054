@@ -27,31 +27,36 @@ const PHARMACIES = [
 ];
 
 // 24 medicines, 3 rx_required. Prices in paise.
+//
+// These are realistic INR figures for what is actually sold — a strip of
+// tablets, not a single tablet. The old catalogue priced one tablet at three
+// rupees, which made every platform fee and every settlement a rounding error
+// and made the payment screens impossible to read as real money.
 const MEDICINES = [
-  { id: 1, name: "Paracetamol 500mg", salt: "Acetaminophen", paise: 250, rx: 0 },
-  { id: 2, name: "Dolo 650", salt: "Acetaminophen", paise: 350, rx: 0 },
-  { id: 3, name: "Crocin Advance", salt: "Acetaminophen", paise: 300, rx: 0 },
-  { id: 4, name: "Ibuprofen 400mg", salt: "Ibuprofen", paise: 400, rx: 0 },
-  { id: 5, name: "Brufen 400", salt: "Ibuprofen", paise: 450, rx: 0 },
-  { id: 6, name: "Aspirin 75mg", salt: "Acetylsalicylic Acid", paise: 200, rx: 0 },
-  { id: 7, name: "Cetirizine 10mg", salt: "Cetirizine", paise: 300, rx: 0 },
-  { id: 8, name: "Allegra 120", salt: "Fexofenadine", paise: 600, rx: 0 },
-  { id: 9, name: "Amoxicillin 500mg", salt: "Amoxicillin", paise: 800, rx: 1 },
-  { id: 10, name: "Azithromycin 500", salt: "Azithromycin", paise: 2200, rx: 1 },
-  { id: 11, name: "Metformin 500mg", salt: "Metformin HCl", paise: 350, rx: 0 },
-  { id: 12, name: "Amlodipine 5mg", salt: "Amlodipine", paise: 400, rx: 1 },
-  { id: 13, name: "Vitamin C 500", salt: "Ascorbic Acid", paise: 500, rx: 0 },
-  { id: 14, name: "Zincovit", salt: "Zinc + Multivitamin", paise: 600, rx: 0 },
-  { id: 15, name: "ORS Sachet", salt: "Oral Rehydration Salts", paise: 1000, rx: 0 },
-  { id: 16, name: "Omeprazole 20", salt: "Omeprazole", paise: 600, rx: 0 },
-  { id: 17, name: "Domperidone 10", salt: "Domperidone", paise: 500, rx: 0 },
-  { id: 18, name: "Ranitidine 150", salt: "Ranitidine", paise: 400, rx: 0 },
-  { id: 19, name: "Cough Syrup 100ml", salt: "Dextromethorphan", paise: 9000, rx: 0 },
-  { id: 20, name: "Diclofenac Gel 30g", salt: "Diclofenac", paise: 7500, rx: 0 },
-  { id: 21, name: "Pantoprazole 40", salt: "Pantoprazole", paise: 700, rx: 0 },
-  { id: 22, name: "Montelukast 10", salt: "Montelukast", paise: 1200, rx: 1 },
-  { id: 23, name: "Cough Drops", salt: "Menthol", paise: 3000, rx: 0 },
-  { id: 24, name: "Antiseptic Liquid", salt: "Chloroxylenol", paise: 11000, rx: 0 },
+  { id: 1, name: "Paracetamol 500mg", salt: "Acetaminophen", paise: 2500, rx: 0 },
+  { id: 2, name: "Dolo 650", salt: "Acetaminophen", paise: 3800, rx: 0 },
+  { id: 3, name: "Crocin Advance", salt: "Acetaminophen", paise: 3200, rx: 0 },
+  { id: 4, name: "Ibuprofen 400mg", salt: "Ibuprofen", paise: 2800, rx: 0 },
+  { id: 5, name: "Brufen 400", salt: "Ibuprofen", paise: 3100, rx: 0 },
+  { id: 6, name: "Aspirin 75mg", salt: "Acetylsalicylic Acid", paise: 2200, rx: 0 },
+  { id: 7, name: "Cetirizine 10mg", salt: "Cetirizine", paise: 2800, rx: 0 },
+  { id: 8, name: "Allegra 120", salt: "Fexofenadine", paise: 9500, rx: 0 },
+  { id: 9, name: "Amoxicillin 500mg", salt: "Amoxicillin", paise: 7200, rx: 1 },
+  { id: 10, name: "Azithromycin 500", salt: "Azithromycin", paise: 21500, rx: 1 },
+  { id: 11, name: "Metformin 500mg", salt: "Metformin HCl", paise: 3500, rx: 0 },
+  { id: 12, name: "Amlodipine 5mg", salt: "Amlodipine", paise: 3000, rx: 1 },
+  { id: 13, name: "Vitamin C 500", salt: "Ascorbic Acid", paise: 4500, rx: 0 },
+  { id: 14, name: "Zincovit", salt: "Zinc + Multivitamin", paise: 5500, rx: 0 },
+  { id: 15, name: "ORS Sachet", salt: "Oral Rehydration Salts", paise: 1200, rx: 0 },
+  { id: 16, name: "Omeprazole 20", salt: "Omeprazole", paise: 5200, rx: 0 },
+  { id: 17, name: "Domperidone 10", salt: "Domperidone", paise: 4000, rx: 0 },
+  { id: 18, name: "Ranitidine 150", salt: "Ranitidine", paise: 3200, rx: 0 },
+  { id: 19, name: "Cough Syrup 100ml", salt: "Dextromethorphan", paise: 9500, rx: 0 },
+  { id: 20, name: "Diclofenac Gel 30g", salt: "Diclofenac", paise: 12000, rx: 0 },
+  { id: 21, name: "Pantoprazole 40", salt: "Pantoprazole", paise: 6500, rx: 0 },
+  { id: 22, name: "Montelukast 10", salt: "Montelukast", paise: 14500, rx: 1 },
+  { id: 23, name: "Cough Drops", salt: "Menthol", paise: 2500, rx: 0 },
+  { id: 24, name: "Antiseptic Liquid", salt: "Chloroxylenol", paise: 9500, rx: 0 },
 ];
 
 // [pharmacy_id, medicine_id, qty_total]
