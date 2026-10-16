@@ -22,6 +22,23 @@ const config: HardhatUserConfig = {
       url: "http://127.0.0.1:8545",
       chainId: 31337,
     },
+
+    // Public testnets.
+    //
+    // Base Sepolia is the target for a public demo: it is an EVM chain with a
+    // free faucet, so the ledger can be pointed at something other than this
+    // laptop without costing anything. The RPC URL and key come from the
+    // environment — nothing is hardcoded here.
+    baseSepolia: {
+      url: process.env.BASE_SEPOLIA_RPC_URL ?? "",
+      chainId: 84532,
+      accounts: process.env.MM_DEPLOYER_PRIVATE_KEY ? [process.env.MM_DEPLOYER_PRIVATE_KEY] : [],
+    },
+    sepolia: {
+      url: process.env.SEPOLIA_RPC_URL ?? "",
+      chainId: 11155111,
+      accounts: process.env.MM_DEPLOYER_PRIVATE_KEY ? [process.env.MM_DEPLOYER_PRIVATE_KEY] : [],
+    },
   },
   paths: {
     sources: "./contracts",

@@ -9,6 +9,8 @@
     "test": "hardhat test",
     "deploy": "hardhat run scripts/deploy.ts --network localhost",
     "deploy:dev": "hardhat run scripts/deploy.ts --network hardhat",
+    "deploy:base-sepolia": "hardhat run scripts/deploy-public.ts --network baseSepolia",
+    "deploy:sepolia": "hardhat run scripts/deploy-public.ts --network sepolia",
     "clean": "hardhat clean"
   },
   "devDependencies": {

@@ -36,6 +36,12 @@ WhatsApp Image*
 *.heic
 .vercel
 .env*
+# .env.example documents the variables and holds no secrets — docs link to it.
+!.env.example
+
+# Demo recording artefacts (videos + screenshots) — large binaries, regenerate
+# with `npm run demo:record`.
+demo-assets/
 
 # --- Blockchain workspace ---
 blockchain/node_modules

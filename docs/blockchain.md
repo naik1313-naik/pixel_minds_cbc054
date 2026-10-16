@@ -128,6 +128,51 @@ an honest "not configured" state.
 | `BLOCKCHAIN_PRIVATE_KEY` | Fallback signer for admin operations | **Yes** |
 | `MEDIMESH_LEDGER_ADDRESS` | Overrides the manifest address | No |
 | `MEDIMESH_DEPLOYMENT_FILE` | Overrides the manifest path | No |
+| `MM_WALLET_KEYS` | `{address: privateKey}` map for a public chain | **Yes** |
+
+### Running on a public chain
+
+The default is a local Hardhat node, which is fine for a demonstration and
+means the whole audit layer works offline. To anchor settlements on a chain that
+is not this laptop, Base Sepolia is the sensible target: it is an EVM chain with
+a free faucet, so nothing here costs anything.
+
+```bash
+cd blockchain
+BASE_SEPOLIA_RPC_URL=https://sepolia.base.org \
+MM_DEPLOYER_PRIVATE_KEY=0x... \
+MM_CONFIRM_PUBLIC_DEPLOY=yes \
+npx hardhat run scripts/deploy-public.ts --network baseSepolia
+```
+
+Then point the app at the manifest the script writes:
+
+```bash
+BLOCKCHAIN_RPC_URL=https://sepolia.base.org
+BLOCKCHAIN_CHAIN_ID=84532
+MEDIMESH_DEPLOYMENT_FILE=./blockchain/deployments/baseSepolia.json
+MM_WALLET_KEYS='{"0xYourPharmacyWallet":"0x...key..."}'
+```
+
+`deploy-public.ts` deliberately refuses several things the local script does:
+
+- it writes **no private keys** to disk — a public deployment must not leave key
+  material next to the ABI in a JSON file;
+- it refuses to deploy from Hardhat's default mnemonic, by deriving that
+  mnemonic's 20 addresses and comparing;
+- it refuses to deploy from an unfunded account, since deployment needs gas;
+- it requires `MM_CONFIRM_PUBLIC_DEPLOY=yes`, so an accidental invocation cannot
+  leave a contract behind that nobody meant to create.
+
+Because roles are enforced per address, each pharmacy still has to sign **its
+own** settlements from its own wallet. `MM_WALLET_KEYS` is the stand-in for the
+KMS or HSM an operator would really use; the indirection is the same, the key
+simply never sits in a repository. A key filed under the wrong address is
+rejected rather than used — `envWalletFor` verifies the derivation before
+handing a key back.
+
+Nothing about the ledger's guarantees changes with the chain. It is still an
+audit anchor and nothing else; see the limitations section below.
 
 ### About signing keys
 

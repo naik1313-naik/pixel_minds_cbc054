@@ -168,13 +168,22 @@ export function getSigner(): ethers.Wallet {
 export function getSignerFor(address: string): ethers.Wallet {
   const dep = loadDeployment();
   const dev = dep?.devKeys;
-  if (!dev) {
+
+  // A public-chain manifest has no devKeys, because a public deploy must never
+  // write key material to disk. Those wallets come from MM_WALLET_KEYS instead —
+  // an address-to-key map held in the environment. In a real deployment this
+  // would be an HSM or a KMS signing API; the indirection is the same, the key
+  // simply never sits in a JSON file next to the ABI.
+  const fromEnv = envWalletFor(address);
+
+  if (!dev && !fromEnv) {
     throw new BlockchainUnavailableError(
       "no_config",
-      "No local dev keystore found. Re-run: cd blockchain && npm run deploy"
+      "No keystore found for this wallet. On a public chain set MM_WALLET_KEYS; for the local " +
+        "demo re-run: cd blockchain && npm run deploy"
     );
   }
-  if (process.env.NODE_ENV === "production" && process.env.MM_ALLOW_DEV_KEYS !== "true") {
+  if (dev && !fromEnv && process.env.NODE_ENV === "production" && process.env.MM_ALLOW_DEV_KEYS !== "true") {
     throw new BlockchainUnavailableError(
       "no_config",
       "Local demo dev keys are disabled in production. Configure a real signer instead."
@@ -189,7 +198,13 @@ export function getSignerFor(address: string): ethers.Wallet {
   const cached = signerCache.get(wanted);
   if (cached) return cached;
 
-  const candidates = [dev.admin, ...Object.values(dev.pharmacies), ...Object.values(dev.delivery)];
+  if (fromEnv) {
+    const wallet = new ethers.Wallet(fromEnv, getProvider());
+    signerCache.set(wanted, wallet);
+    return wallet;
+  }
+
+  const candidates = [dev!.admin, ...Object.values(dev!.pharmacies), ...Object.values(dev!.delivery)];
   const key = candidates.find((k) => {
     try {
       return ethers.getAddress(new ethers.Wallet(k).address) === wanted;
@@ -219,6 +234,37 @@ export function clearSignerCache(): void {
 /** True when the local demo keystore is usable in this environment. */
 export function devKeysAvailable(): boolean {
   return Boolean(loadDeployment()?.devKeys);
+}
+
+/**
+ * Looks up a wallet key in MM_WALLET_KEYS, a JSON object of
+ * `{ "<address>": "0x<private key>" }`.
+ *
+ * Only used on a public chain, and only ever held in the environment — never
+ * written into a deployment manifest.
+ */
+function envWalletFor(address: string): string | null {
+  const raw = process.env.MM_WALLET_KEYS;
+  if (!raw) return null;
+  let map: Record<string, string>;
+  try {
+    map = JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return null;
+  }
+  const wanted = ethers.getAddress(address);
+  for (const [addr, key] of Object.entries(map)) {
+    if (!ethers.isAddress(addr) || ethers.getAddress(addr) !== wanted) continue;
+    try {
+      // Never hand back a key that does not actually belong to the address it
+      // is filed under.
+      if (new ethers.Wallet(key).address !== wanted) return null;
+      return key;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export function getContract(signer?: ethers.Signer): ethers.Contract {
