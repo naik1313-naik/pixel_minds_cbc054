@@ -16,7 +16,7 @@ import {
   setNotificationProvider,
   type NotificationProvider,
 } from "@/lib/providers";
-import { rateLimit, resetRateLimits } from "@/lib/rate-limit";
+import { rateLimit, clearRateLimitStore } from "@/lib/rate-limit";
 import { createHmac } from "crypto";
 
 /** Captures what would have been sent, instead of printing to the console. */
@@ -70,44 +70,59 @@ async function queryRun0(sql: string, params: unknown[]) {
 }
 
 describe("rate limiting", () => {
-  beforeEach(() => {
-    resetRateLimits();
+  // Counters are shared through Postgres, so the store has to be cleared too —
+  // clearing only the process-local fallback would leave the previous test's
+  // rows in place and the first assertion here would already be over its limit.
+  beforeEach(async () => {
+    await clearRateLimitStore();
   });
 
-  it("allows up to the limit, then refuses", () => {
-    for (let i = 0; i < 5; i++) expect(rateLimit("k", 5, 60_000).ok).toBe(true);
-    expect(rateLimit("k", 5, 60_000).ok).toBe(false);
+  it("allows up to the limit, then refuses", async () => {
+    for (let i = 0; i < 5; i++) expect((await rateLimit("k", 5, 60_000)).ok).toBe(true);
+    expect((await rateLimit("k", 5, 60_000)).ok).toBe(false);
   });
 
-  it("reports how long to wait", () => {
-    rateLimit("wait", 1, 60_000);
-    const blocked = rateLimit("wait", 1, 60_000);
+  it("reports how long to wait", async () => {
+    await rateLimit("wait", 1, 60_000);
+    const blocked = await rateLimit("wait", 1, 60_000);
     expect(blocked.ok).toBe(false);
     expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
     expect(blocked.retryAfterSeconds).toBeLessThanOrEqual(60);
   });
 
-  it("resets once the window passes", () => {
-    expect(rateLimit("short", 1, 1).ok).toBe(true);
-    expect(rateLimit("short", 1, 1).ok).toBe(false);
+  it("resets once the window passes", async () => {
+    expect((await rateLimit("short", 1, 1)).ok).toBe(true);
+    expect((await rateLimit("short", 1, 1)).ok).toBe(false);
     // Window is 1ms; a fresh attempt after it elapses is served normally.
     const past = Date.now() + 5;
     while (Date.now() < past) {
       /* spin briefly */
     }
-    expect(rateLimit("short", 1, 1).ok).toBe(true);
+    expect((await rateLimit("short", 1, 1)).ok).toBe(true);
   });
 
-  it("counts keys independently", () => {
-    expect(rateLimit("a", 1, 60_000).ok).toBe(true);
+  it("counts keys independently", async () => {
+    expect((await rateLimit("a", 1, 60_000)).ok).toBe(true);
     // A different account or IP must not inherit the block.
-    expect(rateLimit("b", 1, 60_000).ok).toBe(true);
+    expect((await rateLimit("b", 1, 60_000)).ok).toBe(true);
   });
 
-  it("counts down the remaining allowance", () => {
-    expect(rateLimit("r", 3, 60_000).remaining).toBe(2);
-    expect(rateLimit("r", 3, 60_000).remaining).toBe(1);
-    expect(rateLimit("r", 3, 60_000).remaining).toBe(0);
+  it("counts down the remaining allowance", async () => {
+    expect((await rateLimit("r", 3, 60_000)).remaining).toBe(2);
+    expect((await rateLimit("r", 3, 60_000)).remaining).toBe(1);
+    expect((await rateLimit("r", 3, 60_000)).remaining).toBe(0);
+  });
+
+  it("shares the counter across callers, not across processes' memory", async () => {
+    // The point of moving to the database: the count is a row that any other
+    // caller can see, not a value trapped in one process's heap.
+    expect((await rateLimit("shared", 1, 60_000)).ok).toBe(true);
+    const stored = await queryOne<{ count: number }>(
+      "SELECT count FROM rate_limit_buckets WHERE bucket_key = 'shared'"
+    );
+    expect(stored?.count).toBe(1);
+    // A second caller reading only the database still finds the window closed.
+    expect((await rateLimit("shared", 1, 60_000)).ok).toBe(false);
   });
 });
 

@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
 
   // A 6-digit code is the weakest credential in the system, so it gets the
   // tightest limit: six-digit space falls fast without this.
-  const limited = rateLimit(`2fa:${parsed.data.challenge}:${clientIp(req)}`, 6, 120_000);
+  const limited = await rateLimit(`2fa:${parsed.data.challenge}:${clientIp(req)}`, 6, 120_000);
   if (!limited.ok) {
     return new Response(JSON.stringify({ error: "Too many codes. Try again shortly." }), {
       status: 429,

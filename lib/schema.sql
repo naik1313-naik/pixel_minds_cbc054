@@ -293,6 +293,19 @@ CREATE TABLE IF NOT EXISTS delivery_audit (
   created_at TEXT NOT NULL
 );
 
+-- Rate limit counters.
+--
+-- These live in the database rather than in process memory because the deploy
+-- target is serverless: a fresh instance has a fresh heap, so a memory counter
+-- resets on every cold start and stops limiting anything. One row per window per
+-- key, expired rows deleted opportunistically.
+CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+  bucket_key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  reset_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_reset ON rate_limit_buckets (reset_at);
+
 -- Durable outbox for blockchain operations. An operation row is persisted
 -- BEFORE any transaction is submitted so an uncertain outcome can always be
 -- reconciled instead of blindly retried.

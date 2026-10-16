@@ -24,7 +24,7 @@ export const POST = guard(["customer"], async (ctx, req) => {
 
   // Capture is the most expensive call in the app (it moves money), so the
   // endpoint that triggers it is capped well below the auth limits.
-  const limited = rateLimit(`payment-verify:${clientIp(req)}`, 15, 60_000);
+  const limited = await rateLimit(`payment-verify:${clientIp(req)}`, 15, 60_000);
   if (!limited.ok) {
     return new Response(JSON.stringify({ error: "Too many attempts. Try again shortly." }), {
       status: 429,

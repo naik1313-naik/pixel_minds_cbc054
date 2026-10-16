@@ -23,14 +23,14 @@ export async function POST(req: NextRequest) {
   // the account being guessed, so neither a single IP spray nor a distributed
   // attempt on one address gets unlimited tries.
   const email = parsed.data.email.toLowerCase();
-  const byIp = rateLimit(`login:ip:${clientIp(req)}`, 20, 60_000);
+  const byIp = await rateLimit(`login:ip:${clientIp(req)}`, 20, 60_000);
   if (!byIp.ok) {
     return new Response(
       JSON.stringify({ error: "Too many attempts. Try again shortly." }),
       { status: 429, headers: { "retry-after": String(byIp.retryAfterSeconds) } }
     );
   }
-  const byAccount = rateLimit(`login:acct:${email}`, 8, 60_000);
+  const byAccount = await rateLimit(`login:acct:${email}`, 8, 60_000);
   if (!byAccount.ok) {
     return new Response(
       JSON.stringify({ error: "Too many attempts for this account. Try again shortly." }),
