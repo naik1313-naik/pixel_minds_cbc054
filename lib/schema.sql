@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS requests (
   rx_verified_by INTEGER,
   substitute_for_id INTEGER,
   idempotency_key TEXT UNIQUE,
+  amount_paise INTEGER,                       -- canonical customer total, frozen at confirm
+  platform_fee_paise INTEGER,                 -- MediMesh fee carved out of amount_paise
+  payment_status TEXT,                        -- NULL until confirm; Awaiting | Captured | PaidOut | Refunded | Failed
   created_at TEXT NOT NULL
 );
 
@@ -313,6 +316,14 @@ CREATE TABLE IF NOT EXISTS blockchain_operations (
 );
 
 -- Idempotent column additions for later schema versions.
+--
+-- Columns added after a table first shipped MUST be listed here rather than
+-- inline in the CREATE TABLE above: CREATE TABLE IF NOT EXISTS is a no-op for
+-- an existing table, so an inline addition silently never reaches a deployed
+-- database and the app fails at runtime on a missing column.
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS amount_paise INTEGER;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS platform_fee_paise INTEGER;
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS payment_status TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS id_number_enc TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_status TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_checked_at TEXT;
@@ -320,6 +331,77 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS doc_meta_json TEXT;
 ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS licence_verified TEXT;
 ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS licence_checked_at TEXT;
 ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS licence_meta_json TEXT;
+
+-- =============================================================
+-- Payments (Razorpay)
+--
+-- The database is the operational source of truth for money. Only opaque
+-- gateway references are stored: a Razorpay order/payment id is a merchant
+-- reference, never customer PII. No card, UPI or bank detail ever lands here —
+-- those stay inside the gateway's PCI-scoped checkout.
+--
+-- Money is credited to the pharmacy owner's own linked Razorpay account via a
+-- transfer at capture time, so funds never rest in MediMesh's account beyond
+-- the platform fee.
+-- =============================================================
+
+-- Linked payout account for a pharmacy owner (Razorpay linked account id).
+ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS razorpay_account_id TEXT;
+ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS payout_account_status TEXT; -- pending | submitted | activated | rejected
+ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS payout_account_checked_at TEXT;
+
+CREATE TABLE IF NOT EXISTS payments (
+  id SERIAL PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id),
+  customer_id INTEGER REFERENCES users(id),
+  pharmacy_id INTEGER REFERENCES pharmacies(id),
+  amount_paise INTEGER NOT NULL,             -- what the customer pays
+  platform_fee_paise INTEGER NOT NULL,       -- MediMesh fee (retained)
+  pharmacy_amount_paise INTEGER NOT NULL,   -- routed to the pharmacy owner
+  currency TEXT NOT NULL DEFAULT 'INR',
+  gateway TEXT NOT NULL DEFAULT 'razorpay',
+  status TEXT NOT NULL DEFAULT 'Created',   -- Created | Awaiting | Captured | PaidOut | Refunded | Cancelled | Failed
+  razorpay_order_id TEXT,
+  razorpay_payment_id TEXT,
+  razorpay_transfer_id TEXT,
+  beneficiary_account_id TEXT,              -- pharmacy owner's linked account at capture time
+  failure_reason TEXT,
+  captured_at TEXT,
+  paid_out_at TEXT,
+  refunded_at TEXT,
+  settled_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (request_id)
+);
+
+-- Blockchain audit trail for a settled payment. Mirrors delivery_audit: the
+-- chain proves *that* a settlement was reported by an authorized actor and
+-- when, never that the underlying bank transfer was genuine.
+CREATE TABLE IF NOT EXISTS payment_audit (
+  id SERIAL PRIMARY KEY,
+  payment_id INTEGER NOT NULL REFERENCES payments(id),
+  settlement_ref TEXT NOT NULL UNIQUE,       -- opaque
+  settlement_ref_hash TEXT NOT NULL UNIQUE,  -- keccak256(settlement_ref), on-chain key
+  order_ref TEXT NOT NULL,                   -- opaque order reference
+  order_ref_hash TEXT NOT NULL,              -- keccak256(order_ref), on-chain key
+  amount_paise INTEGER NOT NULL,
+  beneficiary_wallet TEXT,
+  pharmacy_id INTEGER REFERENCES pharmacies(id),
+  actor_user_id INTEGER REFERENCES users(id),
+  actor_role TEXT NOT NULL,
+  gateway_ref_hash TEXT NOT NULL,            -- keccak256 of the gateway settlement ref
+  metadata_hash TEXT NOT NULL,
+  metadata_json TEXT,                        -- canonical settlement metadata, for off-chain re-verification
+  status TEXT NOT NULL DEFAULT 'Pending',    -- Pending | Submitted | Settled | Failed | NeedsReconciliation
+  tx_hash TEXT,
+  block_number INTEGER,
+  tx_operation_id INTEGER,
+  error TEXT,
+  settled_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
 -- Blockchain audit layer indexes.
 CREATE INDEX IF NOT EXISTS idx_batches_pharmacy ON medicine_batches (pharmacy_id);
@@ -336,6 +418,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_audit_unique
 CREATE INDEX IF NOT EXISTS idx_bc_ops_status ON blockchain_operations (status);
 CREATE INDEX IF NOT EXISTS idx_bc_ops_entity ON blockchain_operations (entity_type, entity_id);
 
+-- Payment indexes.
+CREATE INDEX IF NOT EXISTS idx_payments_pharmacy ON payments (pharmacy_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments (status);
+CREATE INDEX IF NOT EXISTS idx_payment_audit_payment ON payment_audit (payment_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_audit_settled
+  ON payment_audit (payment_id) WHERE status = 'Settled';
+
 CREATE INDEX IF NOT EXISTS idx_inventory_med ON inventory (medicine_id);
 CREATE INDEX IF NOT EXISTS idx_requests_customer ON requests (customer_id);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests (status);
@@ -349,6 +438,22 @@ CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log (actor_user_id);
 CREATE INDEX IF NOT EXISTS idx_deliveries_partner ON deliveries (partner_id, status);
 CREATE INDEX IF NOT EXISTS idx_delivery_location_delivery ON delivery_location (delivery_id);
 CREATE INDEX IF NOT EXISTS idx_delivery_offers_delivery ON delivery_offers (delivery_id);
+
+-- =============================================================
+-- Migrations
+--
+-- Everything here must run AFTER every CREATE TABLE above, and every column
+-- added after its table first shipped must be declared here rather than inline
+-- in the CREATE TABLE. Two reasons, both learned the hard way:
+--
+--   1. `CREATE TABLE IF NOT EXISTS` is a no-op on a database that already has
+--      the table, so an inline column addition never reaches a deployed
+--      database and fails at runtime with "column does not exist".
+--   2. An ALTER placed before its table is created breaks a fresh database.
+--
+-- All statements are idempotent, so this block is safe to re-run.
+-- =============================================================
+ALTER TABLE payment_audit ADD COLUMN IF NOT EXISTS metadata_json TEXT;
 
 -- Seed data is inserted with explicit ids, so sequences must be realigned.
 SELECT setval(pg_get_serial_sequence('pharmacies','id'), COALESCE((SELECT MAX(id) FROM pharmacies), 1));
@@ -365,3 +470,5 @@ SELECT setval(pg_get_serial_sequence('delivery_location','id'), COALESCE((SELECT
 SELECT setval(pg_get_serial_sequence('audit_log','id'), COALESCE((SELECT MAX(id) FROM audit_log), 1));
 SELECT setval(pg_get_serial_sequence('login_attempts','id'), COALESCE((SELECT MAX(id) FROM login_attempts), 1));
 SELECT setval(pg_get_serial_sequence('recovery_codes','id'), COALESCE((SELECT MAX(id) FROM recovery_codes), 1));
+SELECT setval(pg_get_serial_sequence('payments','id'), COALESCE((SELECT MAX(id) FROM payments), 1));
+SELECT setval(pg_get_serial_sequence('payment_audit','id'), COALESCE((SELECT MAX(id) FROM payment_audit), 1));

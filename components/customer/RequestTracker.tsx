@@ -8,6 +8,8 @@ import { Alert, Badge, Button, Card, Spinner, StatusPill, toast } from "@/compon
 import { api, formatRupees, timeAgo } from "@/lib/client";
 import { useEventStream } from "@/lib/useEventStream";
 import DeliveryAuditTimeline from "@/components/blockchain/DeliveryAuditTimeline";
+import PaymentPanel from "@/components/customer/PaymentPanel";
+import RiderContactCard from "@/components/customer/RiderContactCard";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -189,6 +191,10 @@ export default function RequestTracker({ requestId }: { requestId: number }) {
           </div>
         )}
       </Card>
+
+      <PaymentPanel requestId={requestId} requestStatus={request.status} onPaid={load} />
+
+      {isDelivery && <RiderContactCard requestId={requestId} />}
 
       {pharmacy && (
         <Card className="p-5">

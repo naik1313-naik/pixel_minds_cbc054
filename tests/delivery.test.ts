@@ -13,6 +13,7 @@ import {
   getDemoOtp,
   pendingOffersForPartner,
   lastKnownLocation,
+  sweepDeliveries,
 } from "@/lib/delivery";
 import { DELIVERY_STATUS, REQUEST_STATUS } from "@/lib/constants";
 
@@ -131,6 +132,111 @@ describe("delivery assignment", () => {
     const second = await partnerByRatingRank(1);
     await declineOffer(deliveryId, first.id);
     expect((await pendingOffersForPartner(second.id)).some((o) => o.id === deliveryId)).toBe(true);
+  });
+});
+
+/**
+ * A rider console that stays empty during a live walkthrough is the single most
+ * likely demo failure, so these cases pin down why a job might not reach the
+ * rider whose screen is actually open.
+ */
+describe("why a rider sees no job", () => {
+  beforeEach(async () => {
+    await resetDemo();
+  });
+
+  it("gives a rider long enough to answer during a live walkthrough", async () => {
+    const { deliveryId } = await setupDelivery();
+    const top = await partnerByRatingRank(0);
+    const offer = (await pendingOffersForPartner(top.id)).find((o) => o.id === deliveryId);
+    expect(offer).toBeTruthy();
+    const windowSec = Math.round(
+      (new Date(offer!.expires_at).getTime() - new Date(offer!.offered_at).getTime()) / 1000
+    );
+    // Enough to notice, switch browser tabs and click.
+    expect(windowSec).toBeGreaterThanOrEqual(60);
+  });
+
+  it("re-offers a job whose offer expired, to the same rider", async () => {
+    const { deliveryId } = await setupDelivery();
+    const top = await partnerByRatingRank(0);
+    await queryOne("SELECT id FROM delivery_offers WHERE delivery_id = $1", [deliveryId]);
+    // The rider never answered: the offer times out.
+    await queryAll("UPDATE delivery_offers SET expires_at = $1 WHERE delivery_id = $2", [
+      new Date(Date.now() - 1000).toISOString(),
+      deliveryId,
+    ]);
+    await sweepDeliveries();
+
+    const still = (await pendingOffersForPartner(top.id)).find((o) => o.id === deliveryId);
+    expect(still).toBeTruthy();
+    // An unanswered offer is not an answer, so the same rider stays eligible.
+    // Excluding them is what leaves the open console empty.
+  });
+
+  it("keeps excluding a rider who explicitly declined", async () => {
+    const { deliveryId } = await setupDelivery();
+    const first = await partnerByRatingRank(0);
+    await declineOffer(deliveryId, first.id);
+    await sweepDeliveries();
+    expect((await pendingOffersForPartner(first.id)).some((o) => o.id === deliveryId)).toBe(false);
+  });
+
+  it("keeps excluding a rider the pharmacy rejected", async () => {
+    const { deliveryId, pharmacyId } = await setupDelivery();
+    const winner = await partnerByRatingRank(0);
+    await acceptOffer(deliveryId, winner.id);
+    const owner = (await queryOne<{ id: number }>(
+      "SELECT id FROM users WHERE role='pharmacy_owner' AND pharmacy_id = $1",
+      [pharmacyId]
+    ))!;
+    await rejectAssignment(deliveryId, { userId: owner.id, role: "pharmacy_owner", pharmacyId });
+    await sweepDeliveries();
+    // A pharmacy rejection is a decision, not a missed window.
+    expect((await pendingOffersForPartner(winner.id)).some((o) => o.id === deliveryId)).toBe(false);
+  });
+
+  it("picks up a job created while every rider was offline", async () => {
+    // Take everyone offline first — the situation a demo hits when the rider
+    // console is opened after the order was placed.
+    await queryAll("UPDATE users SET partner_online = 0 WHERE role = 'delivery_partner'");
+    const { deliveryId } = await setupDelivery();
+
+    const offers = await queryAll<{ id: number }>(
+      "SELECT id FROM delivery_offers WHERE delivery_id = $1 AND status = 'offered'",
+      [deliveryId]
+    );
+    expect(offers).toHaveLength(0);
+
+    // A rider comes online and opens their console (which runs the sweep).
+    const top = (await queryAll<{ id: number }>(
+      "SELECT id FROM users WHERE role='delivery_partner' AND partner_status='verified' ORDER BY rating DESC LIMIT 1"
+    ))[0];
+    await queryAll("UPDATE users SET partner_online = 1 WHERE id = $1", [top.id]);
+    await sweepDeliveries();
+
+    const mine = (await pendingOffersForPartner(top.id)).find((o) => o.id === deliveryId);
+    expect(mine).toBeTruthy();
+  });
+
+  it("never generates delivery work for a pickup order", async () => {
+    const { requestId } = await createRequest({
+      medicineId: 1,
+      qty: 1,
+      customerId: null,
+      customerName: "Pickup Only",
+      fulfilmentType: "pickup",
+    });
+    const detail = (await getRequestDetail(requestId))!;
+    const owner = (await queryOne<{ id: number; role: string }>(
+      "SELECT id, role FROM users WHERE role='pharmacy_owner' AND pharmacy_id = $1",
+      [detail.request.preferred_pharmacy_id]
+    ))!;
+    await confirmRequest(requestId, { userId: owner.id, role: owner.role });
+    const ready = await markReady(requestId, { userId: owner.id, role: owner.role });
+    // A pickup order reaching Ready creates no job, which is the other common
+    // reason a rider board stays empty.
+    expect(ready.deliveryId).toBeNull();
   });
 });
 

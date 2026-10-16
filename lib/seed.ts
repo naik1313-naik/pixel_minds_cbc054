@@ -119,8 +119,8 @@ export async function seedDatabase(): Promise<void> {
       demoRegistryLookup
     );
     await queryRun(
-      `INSERT INTO pharmacies (id, name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count, licence_verified, licence_checked_at, licence_meta_json, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      `INSERT INTO pharmacies (id, name, address, lat, lng, drug_licence_no, verification_status, response_score, fulfilment_count, licence_verified, licence_checked_at, licence_meta_json, razorpay_account_id, payout_account_status, payout_account_checked_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'activated', $14, $15)`,
       [
         p.id,
         p.name,
@@ -138,6 +138,12 @@ export async function seedDatabase(): Promise<void> {
           reference: licCheck.reference,
           reasons: licCheck.reasons,
         }),
+        // Seeded as activated so the payout story works on a fresh database. A
+        // real pharmacy reaches this state through Razorpay's hosted
+        // onboarding; a demo account that starts here cannot onboard without a
+        // bank account nobody is going to type in.
+        `acc_demo_pharmacy_${p.id}`,
+        now,
         now,
       ]
     );

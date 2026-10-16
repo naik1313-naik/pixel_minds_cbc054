@@ -205,22 +205,43 @@ export async function setSetting(key: string, value: string): Promise<void> {
 }
 
 // Transactional full reset, used by the demo panel.
+//
+// Delete order follows the foreign keys: every child row goes before its
+// parent. Postgres enforces this immediately, so an out-of-order entry here
+// fails the whole reset rather than half-clearing the database.
 export async function resetDemo(): Promise<void> {
   await queryRaw(`
+    -- Blockchain audit layer: children of deliveries / payments / batches.
+    DELETE FROM delivery_audit;
+    DELETE FROM payment_audit;
+    DELETE FROM batch_transfers;
+    DELETE FROM medicine_batches;
+    DELETE FROM blockchain_operations;
+
+    -- Delivery children.
     DELETE FROM delivery_location;
     DELETE FROM delivery_offers;
     DELETE FROM deliveries;
+
+    -- Session and audit trails.
     DELETE FROM recovery_codes;
     DELETE FROM sessions;
     DELETE FROM audit_log;
     DELETE FROM login_attempts;
+
+    -- Order children.
     DELETE FROM reservations;
+    DELETE FROM payments;
     DELETE FROM requests;
+
+    -- Catalogue and inventory.
     DELETE FROM ledger;
     DELETE FROM lost_sales;
     DELETE FROM demand_events;
     DELETE FROM inventory;
     DELETE FROM medicines;
+
+    -- People last: users reference pharmacies.
     DELETE FROM users;
     DELETE FROM pharmacies;
     DELETE FROM settings;

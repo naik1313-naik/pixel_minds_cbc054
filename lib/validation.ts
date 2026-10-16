@@ -129,3 +129,16 @@ export const transitionSchema = z.object({
 export const totpEnableSchema = z.object({
   code: z.string().min(6).max(8),
 });
+
+// ------------------------------------------------------------------ payments
+
+/**
+ * Checkout verification payload. Ids come from the gateway's own checkout
+ * callback; the signature is what actually proves the payment happened, and it
+ * is re-derived server-side from our key secret.
+ */
+export const paymentVerifySchema = z.object({
+  razorpayOrderId: z.string().min(4).max(64),
+  razorpayPaymentId: z.string().min(4).max(64),
+  razorpaySignature: z.string().min(16).max(256),
+});

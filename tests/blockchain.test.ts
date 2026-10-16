@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetDemo, queryOne, queryAll, queryRun } from "@/lib/db";
 import {
   hashBatchMetadata,
@@ -28,6 +28,8 @@ import {
   PERMANENT_ERROR_PREFIXES,
 } from "@/lib/blockchain/transactions";
 import { verifyBatchRef, listBatches, DELIVERY_STATUS_MILESTONE } from "@/lib/blockchain/ledger";
+import { hashSettlementMetadata } from "@/lib/blockchain/hashes";
+import { recordSettlementOnChain, verifySettlementOnChain, verifySettlementRef } from "@/lib/blockchain/settlements";
 import { batchRegisterSchema, transferInitiateSchema, deliveryMilestoneSchema } from "@/lib/validation";
 
 // ---------------------------------------------------------------- hashing
@@ -405,5 +407,268 @@ describe("batches listing", () => {
 
   it("scopes to a pharmacy", async () => {
     expect(await listBatches({ pharmacyId: 1 })).toEqual([]);
+  });
+});
+
+// -------------------------------------------------------------- settlements
+
+// ---------------------------------------------------- public verification
+
+/** True only when a node *and* a signer are both available. */
+async function chainReady(): Promise<boolean> {
+  const status = await getChainStatus();
+  return status.ready;
+}
+
+describe("settlement anchoring", () => {
+  // The settlement anchor is signed by the pharmacy's mapped wallet. Tests need
+  // a signer, so the dev key is taken from the (gitignored) local deployment
+  // manifest. Without it the on-chain assertions below are skipped rather than
+  // failing on a machine with no node running.
+  let signerWasSet = false;
+
+  beforeEach(async () => {
+    await resetDemo();
+    if (process.env.BLOCKCHAIN_PRIVATE_KEY) {
+      signerWasSet = true;
+      return;
+    }
+    const { loadDeployment } = await import("@/lib/blockchain/client");
+    const deployment = loadDeployment();
+    const devKey = deployment?.devKeys?.pharmacies?.["1"];
+    if (devKey) {
+      process.env.BLOCKCHAIN_PRIVATE_KEY = devKey;
+      process.env.MM_ALLOW_DEV_KEYS = "true";
+      signerWasSet = true;
+    }
+  });
+
+  afterEach(async () => {
+    if (!signerWasSet) return;
+    delete process.env.MM_ALLOW_DEV_KEYS;
+    const { clearSignerCache } = await import("@/lib/blockchain/client");
+    clearSignerCache();
+  });
+
+  /** Creates a request + an already paid-out payment for pharmacy 1, bypassing the gateway. */
+  async function paidOutPayment() {
+    const medicine = (await queryOne<{ id: number; price_paise: number }>(
+      "SELECT id, price_paise FROM medicines ORDER BY id LIMIT 1"
+    ))!;
+    const request = (await queryOne<{ id: number }>(
+      `INSERT INTO requests
+         (customer_id, customer_name, medicine_id, qty, secured_qty, preferred_pharmacy_id,
+          fulfilment_type, status, created_at)
+       VALUES (NULL, 'Settlement Fixture', $1, 2, 2, 1, 'pickup', 'Completed', $2)
+       RETURNING id`,
+      [medicine.id, new Date().toISOString()]
+    ))!;
+    const at = new Date().toISOString();
+    const total = medicine.price_paise * 2;
+    const pharmacyShare = total - Math.round(total * 0.05);
+    return (await queryOne<{ id: number; pharmacy_amount_paise: number }>(
+      `INSERT INTO payments
+         (request_id, customer_id, pharmacy_id, amount_paise, platform_fee_paise, pharmacy_amount_paise,
+          currency, gateway, status, razorpay_order_id, razorpay_payment_id, razorpay_transfer_id,
+          beneficiary_account_id, captured_at, paid_out_at, settled_at, created_at, updated_at)
+       VALUES ($1, NULL, 1, $2, $3, $4, 'INR', 'demo', 'PaidOut', 'order_x', 'pay_x', 'trf_x',
+               'acc_x', $5, $5, $5, $5, $5)
+       RETURNING id, pharmacy_amount_paise`,
+      [request.id, total, total - pharmacyShare, pharmacyShare, at]
+    ))!;
+  }
+
+  it("hashes settlement metadata deterministically and detects tampering", () => {
+    const base = {
+      schema: METADATA_SCHEMA_VERSION,
+      settlementRef: "SET-1111-2222",
+      orderRef: "ORD-3333-4444",
+      pharmacyId: 1,
+      amountPaise: 9500,
+      gatewayRef: "trf_abc",
+      settledAt: "2026-02-01T10:00:00.000Z",
+    };
+    const original = hashSettlementMetadata(base);
+    expect(original).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(hashSettlementMetadata(base)).toBe(original);
+    // Any field change must produce a different commitment.
+    expect(hashSettlementMetadata({ ...base, amountPaise: 9501 })).not.toBe(original);
+    expect(hashSettlementMetadata({ ...base, pharmacyId: 2 })).not.toBe(original);
+    expect(hashSettlementMetadata({ ...base, gatewayRef: "trf_abd" })).not.toBe(original);
+  });
+
+  it("never puts customer PII into the settlement payload", async () => {
+    await paidOutPayment();
+    const row = (await queryOne<{ customer_name: string }>(
+      "SELECT customer_name FROM requests ORDER BY id DESC LIMIT 1"
+    ))!;
+    const hash = hashSettlementMetadata({
+      schema: METADATA_SCHEMA_VERSION,
+      settlementRef: "SET-1111-2222",
+      orderRef: "ORD-3333-4444",
+      pharmacyId: 1,
+      amountPaise: 100,
+      gatewayRef: "trf_abc",
+      settledAt: "2026-02-01T10:00:00.000Z",
+    });
+    expect(hash).not.toContain(row.customer_name);
+    // The metadata schema simply has no field a name or address could ride in.
+    const fields = Object.keys({
+      schema: 1,
+      settlementRef: "",
+      orderRef: "",
+      pharmacyId: 0,
+      amountPaise: 0,
+      gatewayRef: "",
+      settledAt: "",
+    });
+    expect(fields).not.toContain("customerName");
+    expect(fields).not.toContain("customerAddress");
+  });
+
+  it("anchors a settlement on-chain and reads the same value back", async () => {
+    if (!(await chainReady())) {
+      // No node or no signer: the DB-only invariants above still ran.
+      return;
+    }
+    const admin = (await queryOne<{ id: number }>("SELECT id FROM users WHERE role = 'admin' LIMIT 1"))!;
+    const payment = await paidOutPayment();
+    const audit = await recordSettlementOnChain(payment.id, { userId: admin.id, role: "admin" });
+    expect(audit.status).toBe("Settled");
+    expect(audit.tx_hash).toBeTruthy();
+    expect(audit.block_number).toBeGreaterThan(0);
+
+    const chain = await verifySettlementOnChain(payment.id);
+    expect(chain.exists).toBe(true);
+    expect(chain.matches).toBe(true);
+    expect(chain.amountPaise).toBe(payment.pharmacy_amount_paise);
+
+    // Re-anchoring is a no-op: the same reference is not resubmitted.
+    const again = await recordSettlementOnChain(payment.id, { userId: admin.id, role: "admin" });
+    expect(again.tx_hash).toBe(audit.tx_hash);
+  });
+
+  it("records a permanent failure instead of retrying a replayed settlement", async () => {
+    if (!(await chainReady())) return;
+    const admin = (await queryOne<{ id: number }>("SELECT id FROM users WHERE role = 'admin' LIMIT 1"))!;
+    const payment = await paidOutPayment();
+    await recordSettlementOnChain(payment.id, { userId: admin.id, role: "admin" });
+
+    // Force a second submission with the same on-chain id; the contract must
+    // reject it and the outbox must classify that as permanent.
+    const audit = (await queryOne<{ settlement_ref_hash: string }>(
+      "SELECT settlement_ref_hash FROM payment_audit WHERE payment_id = $1",
+      [payment.id]
+    ))!;
+    const opsBefore = (await queryAll<{ id: number }>(
+      "SELECT id FROM blockchain_operations WHERE entity_type = 'payment' AND entity_id = $1",
+      [payment.id]
+    )).length;
+    await recordSettlementOnChain(payment.id, { userId: admin.id, role: "admin" });
+    const opsAfter = (await queryAll<{ id: number }>(
+      "SELECT id FROM blockchain_operations WHERE entity_type = 'payment' AND entity_id = $1",
+      [payment.id]
+    )).length;
+    expect(opsAfter).toBe(opsBefore);
+    expect(isPermanentFailure("SettlementAlreadyRecorded")).toBe(true);
+    expect(audit.settlement_ref_hash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+});
+
+// ---------------------------------------------------- public verification
+
+describe("public settlement verification", () => {
+  beforeEach(async () => {
+    await resetDemo();
+  });
+
+  /** Anchors a real settlement for pharmacy 1 and returns its opaque ref. */
+  async function anchored() {
+    const medicine = (await queryOne<{ id: number; price_paise: number }>(
+      "SELECT id, price_paise FROM medicines ORDER BY id LIMIT 1"
+    ))!;
+    const request = (await queryOne<{ id: number }>(
+      `INSERT INTO requests
+         (customer_id, customer_name, medicine_id, qty, secured_qty, preferred_pharmacy_id,
+          fulfilment_type, status, created_at)
+       VALUES (NULL, 'Verification Fixture', $1, 1, 1, 1, 'pickup', 'Completed', $2)
+       RETURNING id`,
+      [medicine.id, new Date().toISOString()]
+    ))!;
+    const at = new Date().toISOString();
+    const total = medicine.price_paise;
+    const share = total - Math.round(total * 0.05);
+    const payment = (await queryOne<{ id: number }>(
+      `INSERT INTO payments
+         (request_id, customer_id, pharmacy_id, amount_paise, platform_fee_paise, pharmacy_amount_paise,
+          currency, gateway, status, razorpay_order_id, razorpay_payment_id, razorpay_transfer_id,
+          beneficiary_account_id, captured_at, paid_out_at, settled_at, created_at, updated_at)
+       VALUES ($1, NULL, 1, $2, $3, $4, 'INR', 'demo', 'PaidOut', 'order_v', 'pay_v', 'trf_v',
+               'acc_v', $5, $5, $5, $5, $5)
+       RETURNING id`,
+      [request.id, total, total - share, share, at]
+    ))!;
+    if (!(await chainReady())) return { paymentId: payment.id, settlementRef: null as string | null };
+    const admin = (await queryOne<{ id: number }>("SELECT id FROM users WHERE role = 'admin' LIMIT 1"))!;
+    const audit = await recordSettlementOnChain(payment.id, { userId: admin.id, role: "admin" });
+    return { paymentId: payment.id, settlementRef: audit.settlement_ref };
+  }
+
+  it("confirms a settled payout and proves the stored record is unaltered", async () => {
+    const { settlementRef } = await anchored();
+    if (!settlementRef) return; // no node/signer: nothing to assert
+
+    const v = await verifySettlementRef(settlementRef);
+    expect(v.status).toBe("SETTLED");
+    expect(v.metadataMatches).toBe(true);
+    expect(v.pharmacyName).toBe("Apollo Pharmacy (Demo)");
+    expect(v.amountPaise).toBeGreaterThan(0);
+    expect(v.txHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(v.blockNumber).toBeGreaterThan(0);
+    // The scope statement rides along with every success, or the page reads as
+    // a clean bill of health for the pharmacy.
+    expect(v.note).toMatch(/does NOT prove a bank transfer/i);
+  });
+
+  it("never publishes anything about a patient", async () => {
+    const { settlementRef } = await anchored();
+    if (!settlementRef) return;
+    const serialized = JSON.stringify(await verifySettlementRef(settlementRef)).toLowerCase();
+    expect(serialized).not.toContain("verification fixture");
+    expect(serialized).not.toContain("@");
+  });
+
+  it("reports an unknown reference without accusing anyone", async () => {
+    const v = await verifySettlementRef("SET-AAAA-BBBB-CCCC-DDDDEEEEFFFF");
+    expect(v.status).toBe("NOT_FOUND");
+    expect(v.pharmacyName).toBeNull();
+    expect(v.amountPaise).toBe(0);
+    // Explicitly not a claim about the pharmacy's honesty.
+    expect(v.note).toMatch(/not evidence that a pharmacy withheld/i);
+  });
+
+  it("reports the on-chain amount even if the local row was edited", async () => {
+    const { settlementRef, paymentId } = await anchored();
+    if (!settlementRef) return;
+    // amount_paise is not itself a hashed field, so this must not silently
+    // change what the public page reports.
+    await queryRun("UPDATE payment_audit SET amount_paise = amount_paise + 100000 WHERE payment_id = $1", [
+      paymentId,
+    ]);
+    const v = await verifySettlementRef(settlementRef);
+    expect(v.amountPaise).toBeLessThan(100000);
+  });
+
+  it("detects tampering with the hashed metadata itself", async () => {
+    const { settlementRef, paymentId } = await anchored();
+    if (!settlementRef) return;
+    await queryRun(
+      "UPDATE payment_audit SET metadata_json = replace(metadata_json, '\"amountPaise\":', '\"amountPaise\":9') WHERE payment_id = $1",
+      [paymentId]
+    );
+    const v = await verifySettlementRef(settlementRef);
+    expect(v.status).toBe("MISMATCH");
+    expect(v.metadataMatches).toBe(false);
+    expect(v.note).toMatch(/do not pay out/i);
   });
 });

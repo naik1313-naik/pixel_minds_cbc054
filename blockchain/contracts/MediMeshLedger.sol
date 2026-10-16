@@ -89,11 +89,24 @@ contract MediMeshLedger is AccessControl, ReentrancyGuard {
         uint256 milestoneCount;
     }
 
+    /// @notice A reported payout of a customer payment to a pharmacy owner.
+    ///         `amountPaise` is the routed amount, excluding the platform fee.
+    struct Settlement {
+        bytes32 id; // keccak256 of the opaque settlement reference
+        bytes32 orderRef; // keccak256 of the opaque order reference
+        address beneficiary; // pharmacy wallet credited
+        uint256 amountPaise; // routed amount, integer paise
+        bytes32 settlementHash; // keccak256 of canonical off-chain settlement metadata
+        uint64 settledAt; // block timestamp
+        address reportedBy; // authorized actor that submitted the report
+    }
+
     // ---------------------------------------------------------------- storage
 
     mapping(bytes32 => Batch) private _batches;
     mapping(bytes32 => Transfer) private _transfers;
     mapping(bytes32 => DeliveryState) private _deliveries;
+    mapping(bytes32 => Settlement) private _settlements;
 
     // Guards replay: a given (delivery, milestone) pair may only be recorded once.
     mapping(bytes32 => mapping(Milestone => bool)) private _milestoneRecorded;
@@ -136,6 +149,15 @@ contract MediMeshLedger is AccessControl, ReentrancyGuard {
         uint256 milestoneIndex
     );
 
+    event SettlementRecorded(
+        bytes32 indexed settlementId,
+        bytes32 indexed orderRef,
+        address indexed beneficiary,
+        uint256 amountPaise,
+        bytes32 settlementHash,
+        uint64 settledAt
+    );
+
     // ---------------------------------------------------------------- errors
 
     error NotAdmin(address caller);
@@ -160,6 +182,11 @@ contract MediMeshLedger is AccessControl, ReentrancyGuard {
     error MilestoneAlreadyRecorded(uint8 milestone);
     error DeliveryAlreadyDelivered();
     error ZeroAddress();
+    error EmptySettlementId();
+    error EmptyOrderRef();
+    error EmptySettlementHash();
+    error ZeroAmount();
+    error SettlementAlreadyRecorded(bytes32 settlementId);
 
     // ---------------------------------------------------------------- modifiers
 
@@ -452,5 +479,89 @@ contract MediMeshLedger is AccessControl, ReentrancyGuard {
     /// @notice True when the recorded order has reached Delivered.
     function isDelivered(bytes32 orderRef) external view returns (bool) {
         return _deliveries[orderRef].lastMilestone == Milestone.Delivered;
+    }
+
+    // -------------------------------------------------------------- settlements
+
+    /**
+     * @notice Record that a customer payment was routed to a pharmacy owner.
+     *
+     * @dev This is an audit anchor, NOT a payment rail. The contract never
+     *      holds, moves or escrows value, and it cannot verify that a bank
+     *      transfer actually happened. What it proves is narrower and should
+     *      be stated as such: an authorized actor reported that amount A for
+     *      order B was routed to pharmacy wallet C, at time T.
+     *
+     *      Privacy: `orderRef` and `settlementHash` are hashes of opaque
+     *      references. No customer name, phone, address or gateway credential
+     *      is stored here.
+     *
+     *      The beneficiary must hold PHARMACY_ROLE, so a settlement can only be
+     *      attributed to a pharmacy this contract has authorized.
+     */
+    function recordSettlement(
+        bytes32 settlementId,
+        bytes32 orderRef,
+        bytes32 settlementHash,
+        uint256 amountPaise,
+        address beneficiary
+    ) external onlyDeliveryActor nonReentrant {
+        if (settlementId == bytes32(0)) revert EmptySettlementId();
+        if (orderRef == bytes32(0)) revert EmptyOrderRef();
+        if (settlementHash == bytes32(0)) revert EmptySettlementHash();
+        if (amountPaise == 0) revert ZeroAmount();
+        if (beneficiary == address(0)) revert ZeroAddress();
+        if (!hasRole(PHARMACY_ROLE, beneficiary)) revert NotPharmacy(beneficiary);
+        // Append-only: a settlement reference is recorded exactly once.
+        if (_settlements[settlementId].settledAt != 0) revert SettlementAlreadyRecorded(settlementId);
+
+        _settlements[settlementId] = Settlement({
+            id: settlementId,
+            orderRef: orderRef,
+            beneficiary: beneficiary,
+            amountPaise: amountPaise,
+            settlementHash: settlementHash,
+            settledAt: uint64(block.timestamp),
+            reportedBy: msg.sender
+        });
+
+        emit SettlementRecorded(
+            settlementId,
+            orderRef,
+            beneficiary,
+            amountPaise,
+            settlementHash,
+            uint64(block.timestamp)
+        );
+    }
+
+    /// @notice Read a settlement. Returns zeroed fields when unknown.
+    function getSettlement(bytes32 settlementId)
+        external
+        view
+        returns (
+            bytes32 id,
+            bytes32 orderRef,
+            address beneficiary,
+            uint256 amountPaise,
+            bytes32 settlementHash,
+            uint64 settledAt,
+            address reportedBy
+        )
+    {
+        Settlement storage s = _settlements[settlementId];
+        return (
+            s.id,
+            s.orderRef,
+            s.beneficiary,
+            s.amountPaise,
+            s.settlementHash,
+            s.settledAt,
+            s.reportedBy
+        );
+    }
+
+    function settlementExists(bytes32 settlementId) external view returns (bool) {
+        return _settlements[settlementId].settledAt != 0;
     }
 }

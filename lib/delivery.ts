@@ -17,18 +17,31 @@ import { haversineKm, roadDistanceKm, etaMinutes, headingDeg, interpolate } from
 import { randomDigits, sha256Hex, timingSafeEqual, encryptSecret, decryptSecret } from "./crypto";
 import { recordAudit } from "./audit";
 import { publish, channels } from "./sse";
-import { getSmsProvider } from "./providers";
+import { getSmsProvider, getNotificationProvider } from "./providers";
+import { settlePaymentForRequest } from "./payments";
+import { isDemoMode } from "./demo";
 
 const OFFER_WINDOW_SECONDS = 30;
+const OFFER_WINDOW_SECONDS_DEMO = 120;
 const OTP_TTL_MINUTES = 30;
 const OTP_MAX_ATTEMPTS = 5;
 const MIN_LOCATION_INTERVAL_MS = 1200;
 const MAX_SPEED_MPS = 45; // ~160 km/h teleport guard
 
-export function isDemoMode(): boolean {
-  const v = process.env.DEMO_MODE;
-  return v === "1" || v === "true" || process.env.NODE_ENV !== "production";
+/**
+ * How long a rider has to respond to an offer.
+ *
+ * 30 seconds is a realistic racing-game window; it is hopeless for a live
+ * projection, where the operator has to notice, switch tabs and click before the
+ * offer evaporates and moves to the next rider. Demo mode gets a longer window
+ * so a walkthrough is not decided by reflexes.
+ */
+function offerWindowSeconds(): number {
+  return isDemoMode() ? OFFER_WINDOW_SECONDS_DEMO : OFFER_WINDOW_SECONDS;
 }
+
+/** Re-exported so existing imports keep working; the rule now lives in one file. */
+export { isDemoMode };
 
 interface Delivery {
   id: number;
@@ -118,6 +131,13 @@ export async function createDeliveryForRequest(requestId: number): Promise<Deliv
 // -------------------------------------------------------------- assignment
 
 // Verified, online partners with no active delivery that haven't been offered this job.
+//
+// A partner who *declined* or was *rejected* by the pharmacy is excluded
+// permanently for this delivery — that is an answer, and re-asking would be
+// nagging. A partner whose offer merely *expired* is NOT excluded: they simply
+// did not answer in time, and excluding them means the one rider whose console
+// is open on the demonstration screen never gets the job again, while the
+// delivery quietly sits with someone who is not there.
 async function candidatePartners(deliveryId: number) {
   return (await queryAll(
     `SELECT u.id, u.name, u.rating
@@ -132,7 +152,11 @@ async function candidatePartners(deliveryId: number) {
        )
        AND NOT EXISTS (
          SELECT 1 FROM delivery_offers o
-         WHERE o.delivery_id = $1 AND o.partner_id = u.id
+         WHERE o.delivery_id = $1 AND o.partner_id = u.id AND o.status IN ('declined', 'rejected', 'accepted')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM delivery_offers o
+         WHERE o.delivery_id = $1 AND o.partner_id = u.id AND o.status = 'offered'
        )
      ORDER BY u.rating DESC`,
     [deliveryId]
@@ -156,7 +180,7 @@ export async function offerNextPartner(
       deliveryId,
       partner.id,
       new Date(now).toISOString(),
-      new Date(now + OFFER_WINDOW_SECONDS * 1000).toISOString(),
+      new Date(now + offerWindowSeconds() * 1000).toISOString(),
     ]
   );
   const dl = d;
@@ -176,6 +200,19 @@ export async function offerNextPartner(
     status: "OfferSent",
   });
   void pharmacy;
+
+  // A rider polling a dashboard finds out about a job eventually; a rider who is
+  // out on the road does not poll. This is the difference between the assignment
+  // logic working and the rider experience working.
+  const rider = await queryOne<{ phone: string | null; name: string }>(
+    "SELECT phone, name FROM users WHERE id = $1",
+    [partner.id]
+  );
+  await getNotificationProvider().notify({
+    to: rider?.phone,
+    message: `MediMesh: new delivery job near you — ${d.distance_km?.toFixed(1) ?? "?"} km, ~${d.eta_minutes ?? "?"} min. Open your console to accept (${OFFER_WINDOW_SECONDS_DEMO}s window in this demo).`,
+  });
+
   return { offered: true, partnerId: partner.id };
 }
 
@@ -245,6 +282,27 @@ export async function approveAssignment(
     publishDelivery(deliveryId, d.request_id, DELIVERY_STATUS.ASSIGNED);
     publish(`partner:${d.partner_id}`, { type: "delivery", deliveryId, requestId: d.request_id, status: DELIVERY_STATUS.ASSIGNED });
     publish(channels.pharmacy(d.pharmacy_id), { type: "delivery", deliveryId, requestId: d.request_id, status: DELIVERY_STATUS.ASSIGNED });
+
+    // Both halves of the handoff are now committed, so both parties hear about
+    // it: the rider knows the job is theirs, the customer knows who is coming.
+    const notified = await queryOne<{ rider_phone: string | null; rider_name: string; customer_phone: string | null }>(
+      `SELECT u.phone AS rider_phone, u.name AS rider_name, c.phone AS customer_phone
+         FROM deliveries del
+         JOIN users u ON u.id = del.partner_id
+         LEFT JOIN requests r ON r.id = del.request_id
+         LEFT JOIN users c ON c.id = r.customer_id
+        WHERE del.id = $1`,
+      [deliveryId]
+    );
+    const provider = getNotificationProvider();
+    await provider.notify({
+      to: notified?.rider_phone,
+      message: `MediMesh: you have been assigned delivery #${deliveryId}. Pick up and go.`,
+    });
+    await provider.notify({
+      to: notified?.customer_phone,
+      message: `MediMesh: ${notified?.rider_name ?? "Your rider"} has been assigned to your order #${d.request_id}.`,
+    });
   }
   return res;
 }
@@ -303,6 +361,8 @@ export async function declineOffer(deliveryId: number, userId: number) {
 // Sweep: expire timed-out offers and keep offering. Also purge retention.
 export async function sweepDeliveries(): Promise<void> {
   const now = nowIso();
+
+  // 1. Offers nobody answered are expired, then the job goes back on the market.
   const expired = (await queryAll(
     `SELECT o.delivery_id FROM delivery_offers o
      JOIN deliveries d ON d.id = o.delivery_id
@@ -316,6 +376,24 @@ export async function sweepDeliveries(): Promise<void> {
     );
     await offerNextPartner(row.delivery_id);
   }
+
+  // 2. Jobs that never got an offer at all — created while every rider was
+  //    offline — were previously stranded forever, because nothing retried them.
+  //    They are retried on every sweep, so a rider coming online later picks the
+  //    job up instead of the pharmacy having to re-create the order.
+  const unoffered = (await queryAll(
+    `SELECT d.id FROM deliveries d
+      WHERE d.status = 'SearchingPartner'
+        AND NOT EXISTS (
+          SELECT 1 FROM delivery_offers o
+          WHERE o.delivery_id = d.id AND o.status = 'offered'
+        )`,
+    []
+  )) as { id: number }[];
+  for (const row of unoffered) {
+    await offerNextPartner(row.id);
+  }
+
   await purgeOldLocations();
 }
 
@@ -576,12 +654,18 @@ export async function verifyHandover(input: {
   await recordAudit({ actorUserId: input.userId, actorRole: "delivery_partner", action: "delivery.delivered", entityType: "delivery", entityId: input.deliveryId, meta: proof });
   publishDelivery(input.deliveryId, d.request_id, DELIVERY_STATUS.DELIVERED);
   publish(channels.pharmacy(d.pharmacy_id), { type: "delivery", deliveryId: input.deliveryId, requestId: d.request_id, status: DELIVERY_STATUS.DELIVERED });
-  await finalizeDeliveredRequest(d.request_id);
+  await finalizeDeliveredRequest(d.request_id, {
+    userId: input.userId,
+    role: "delivery_partner",
+  });
   return { ok: true, delivery: await getDelivery(input.deliveryId) };
 }
 
 // Marks the underlying request Completed and commits the reserved stock.
-async function finalizeDeliveredRequest(requestId: number): Promise<void> {
+async function finalizeDeliveredRequest(
+  requestId: number,
+  actor: { userId: number; role: string }
+): Promise<void> {
   await withTransaction<{ ok: boolean }>(async (tx) => {
     const req = (await tx.one("SELECT * FROM requests WHERE id = $1", [requestId])) as
       | { status: string; medicine_id: number; preferred_pharmacy_id: number | null }
@@ -607,6 +691,9 @@ async function finalizeDeliveredRequest(requestId: number): Promise<void> {
     return { ok: true };
   });
   publish(channels.request(requestId), { type: "request", requestId, status: "Completed" });
+  // Verified handover completes the sale, so the pharmacy owner's share is
+  // released. Idempotent, and a chain outage here never blocks the delivery.
+  await settlePaymentForRequest(requestId, actor);
 }
 
 // The OTP is numeric; only the assigned rider's active delivery exposes its hash state.
@@ -698,14 +785,16 @@ export async function listAllDeliveries() {
 export async function pendingOffersForPartner(partnerId: number) {
   await sweepDeliveries();
   return (await queryAll(
-    `SELECT o.id AS offer_id, o.expires_at, d.*, p.name AS pharmacy_name, p.lat AS pharmacy_lat, p.lng AS pharmacy_lng
+    // offered_at is included so the console can show how long is left to
+    // respond, rather than a bare expiry timestamp the rider has to decode.
+    `SELECT o.id AS offer_id, o.offered_at, o.expires_at, d.*, p.name AS pharmacy_name, p.lat AS pharmacy_lat, p.lng AS pharmacy_lng
      FROM delivery_offers o
      JOIN deliveries d ON d.id = o.delivery_id
      JOIN pharmacies p ON p.id = d.pharmacy_id
      WHERE o.partner_id = $1 AND o.status = 'offered' AND d.status = 'SearchingPartner'
      ORDER BY o.id DESC`,
     [partnerId]
-  )) as (Delivery & { offer_id: number; expires_at: string })[];
+  )) as (Delivery & { offer_id: number; offered_at: string; expires_at: string })[];
 }
 
 export async function getSettingInt(key: string, fallback: number): Promise<number> {

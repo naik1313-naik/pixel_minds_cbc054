@@ -91,6 +91,21 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "EmptyOrderRef",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EmptySettlementHash",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EmptySettlementId",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint8",
@@ -213,6 +228,17 @@
     "inputs": [
       {
         "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "SettlementAlreadyRecorded",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
         "name": "transferId",
         "type": "bytes32"
       }
@@ -256,6 +282,11 @@
   {
     "inputs": [],
     "name": "ZeroAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ZeroAmount",
     "type": "error"
   },
   {
@@ -530,6 +561,49 @@
       }
     ],
     "name": "RoleRevoked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "orderRef",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "beneficiary",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amountPaise",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "settlementHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "settledAt",
+        "type": "uint64"
+      }
+    ],
+    "name": "SettlementRecorded",
     "type": "event"
   },
   {
@@ -864,6 +938,55 @@
     "inputs": [
       {
         "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "getSettlement",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "id",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "orderRef",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "beneficiary",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountPaise",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "settlementHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint64",
+        "name": "settledAt",
+        "type": "uint64"
+      },
+      {
+        "internalType": "address",
+        "name": "reportedBy",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
         "name": "transferId",
         "type": "bytes32"
       }
@@ -1055,6 +1178,39 @@
     "inputs": [
       {
         "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "orderRef",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "settlementHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountPaise",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "beneficiary",
+        "type": "address"
+      }
+    ],
+    "name": "recordSettlement",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
         "name": "batchId",
         "type": "bytes32"
       },
@@ -1173,6 +1329,25 @@
     "name": "revokeRole",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "settlementExists",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

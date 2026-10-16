@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, Boxes, ClipboardList, Link2, Plus, RefreshCw, Trash2, Truck, Wallet } from "lucide-react";
+import { ArrowRightLeft, Banknote, Boxes, ClipboardList, Link2, Plus, RefreshCw, Trash2, Truck, Wallet } from "lucide-react";
 import { Badge, Button, Card, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
 import BatchPanel from "@/components/blockchain/BatchPanel";
 import TransferPanel from "@/components/blockchain/TransferPanel";
+import DeliveryAuditTimeline from "@/components/blockchain/DeliveryAuditTimeline";
+import PayoutPanel from "@/components/pharmacy/PayoutPanel";
 
 interface RequestRow {
   id: number;
@@ -61,6 +63,7 @@ const TABS = [
   { key: "batches", label: "Batches", icon: <Link2 className="h-4 w-4" /> },
   { key: "transfers", label: "Transfers", icon: <ArrowRightLeft className="h-4 w-4" /> },
   { key: "ledger", label: "Ledger", icon: <Wallet className="h-4 w-4" /> },
+  { key: "payouts", label: "Payouts", icon: <Banknote className="h-4 w-4" /> },
   { key: "deliveries", label: "Deliveries", icon: <Truck className="h-4 w-4" /> },
 ] as const;
 
@@ -311,6 +314,8 @@ export default function PharmacyConsole({
         </Card>
       )}
 
+      {tab === "payouts" && <PayoutPanel />}
+
       {tab === "deliveries" && (
         <Card className="divide-y divide-slate-100">
           {deliveries.length === 0 && <p className="p-6 text-center text-sm text-slate-400">No active deliveries.</p>}
@@ -333,6 +338,15 @@ export default function PharmacyConsole({
             </div>
           ))}
         </Card>
+      )}
+
+      {/* On-chain audit trail for each delivery this pharmacy is fulfilling. */}
+      {tab === "deliveries" && deliveries.length > 0 && (
+        <div className="space-y-4">
+          {deliveries.map((d) => (
+            <DeliveryAuditTimeline key={`audit-${d.id}`} deliveryId={d.id} />
+          ))}
+        </div>
       )}
     </div>
   );

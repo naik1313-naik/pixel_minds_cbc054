@@ -57,6 +57,25 @@ export interface TransferMetadata {
 }
 
 /**
+ * Settlement metadata anchored when a customer payment is routed to a
+ * pharmacy owner.
+ *
+ * `gatewayRef` is the opaque gateway settlement reference (a transfer id, not a
+ * bank or card identifier). `orderRef` ties the settlement back to the order's
+ * on-chain delivery trail. Customer identity, contact details and any payment
+ * instrument data are deliberately absent — none of it may ever be hashed here.
+ */
+export interface SettlementMetadata {
+  schema: number;
+  settlementRef: string; // opaque, generated with crypto-secure randomness
+  orderRef: string; // opaque order reference
+  pharmacyId: number;
+  amountPaise: number; // routed amount, excludes the platform fee
+  gatewayRef: string; // opaque gateway transfer reference
+  settledAt: string; // ISO timestamp of the capture
+}
+
+/**
  * Hash a string to bytes32 so it can be ABI-packed.
  *
  * solidityPackedKeccak256 only accepts fixed-width Solidity types — "string" is
@@ -117,6 +136,22 @@ export function hashTransferMetadata(meta: TransferMetadata): string {
 /** keccak256 of a UTF-8 string — used for opaque on-chain identifiers. */
 export function hashRef(ref: string): string {
   return keccak256(toUtf8Bytes(ref));
+}
+
+export function hashSettlementMetadata(meta: SettlementMetadata): string {
+  return solidityPackedKeccak256(
+    ["bytes32", "uint8", "bytes32", "bytes32", "uint256", "uint256", "bytes32", "bytes32"],
+    [
+      h("MediMeshSettlementMetadata"),
+      meta.schema,
+      h(meta.settlementRef),
+      h(meta.orderRef),
+      meta.pharmacyId,
+      meta.amountPaise,
+      h(meta.gatewayRef),
+      h(meta.settledAt),
+    ]
+  );
 }
 
 /**

@@ -19,6 +19,7 @@ import { haversineKm } from "./geo";
 import { recordAudit } from "./audit";
 import { publish, channels } from "./sse";
 import { createDeliveryForRequest, getDeliveryForRequest } from "./delivery";
+import { createIntent, refundPaymentForRequest, settlePaymentForRequest } from "./payments";
 
 /** Thrown for client-fixable problems in a request; surfaces as HTTP 400. */
 export class RequestValidationError extends Error {
@@ -544,6 +545,21 @@ export async function confirmRequest(requestId: number, actor: { userId: number;
     }
     await tx.run("UPDATE requests SET status = $1 WHERE id = $2", [REQUEST_STATUS.CONFIRMED, requestId]);
   });
+  // Confirming an order is the point the amount becomes owed, so this is where
+  // the payment intent opens. A gateway outage must not block confirmation: the
+  // intent is a database fact, the gateway order is created lazily on checkout.
+  try {
+    await createIntent(requestId);
+  } catch (e) {
+    await recordAudit({
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      action: "payment.intent_failed",
+      entityType: "request",
+      entityId: requestId,
+      meta: { message: e instanceof Error ? e.message : "unknown" },
+    });
+  }
   await recordAudit({
     actorUserId: actor.userId,
     actorRole: actor.role,
@@ -692,6 +708,9 @@ export async function completeRequest(requestId: number, actor: { userId: number
       requestId,
       status: REQUEST_STATUS.COMPLETED,
     });
+  // Pickup fulfilment is done, so any captured payment is released to the
+  // pharmacy owner. Safe to call repeatedly: settlement is idempotent.
+  await settlePaymentForRequest(requestId, { userId: actor.userId, role: actor.role });
   return { ok: true };
 }
 
@@ -724,6 +743,24 @@ export async function cancelRequest(requestId: number, actor: { userId: number; 
     entityId: requestId,
   });
   publish(channels.request(requestId), { type: "request", requestId, status: REQUEST_STATUS.CANCELLED });
+  // Anything already captured is returned to the customer. An intent that was
+  // never captured simply closes as cancelled.
+  try {
+    await refundPaymentForRequest(requestId, { userId: actor.userId, role: actor.role }, "Order cancelled");
+  } catch (e) {
+    // A failed refund must not mask the cancellation; it is recorded in the
+    // audit log and surfaces on the payment record.
+    // eslint-disable-next-line no-console
+    console.error("refund after cancel failed", e);
+    await recordAudit({
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      action: "payment.refund_failed",
+      entityType: "request",
+      entityId: requestId,
+      meta: { message: e instanceof Error ? e.message : "unknown" },
+    });
+  }
   return { ok: true };
 }
 
@@ -746,6 +783,9 @@ export interface RequestRow {
   rx_verified_by: number | null;
   substitute_for_id: number | null;
   idempotency_key: string | null;
+  amount_paise: number | null;
+  platform_fee_paise: number | null;
+  payment_status: string | null;
   created_at: string;
 }
 

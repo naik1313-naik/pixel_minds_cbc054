@@ -16,6 +16,7 @@
     "test:coverage": "vitest run --coverage",
     "acceptance": "node scripts/acceptance.mjs",
     "db:inspect": "node scripts/db-inspect.mjs",
+    "db:migrate": "node scripts/db-migrate.mjs",
     "db:reset": "node scripts/db-reset.mjs",
     "e2e": "playwright test",
     "e2e:install": "playwright install chromium",
@@ -26,6 +27,10 @@
     "chain:deploy": "npm --prefix blockchain run deploy",
     "abi:generate": "node scripts/generate-abi.mjs",
     "smoke:blockchain": "node scripts/smoke-blockchain.mjs",
+    "smoke:payments": "node scripts/demo-payment-flow.mjs",
+    "smoke:delivery-assign": "node scripts/demo-delivery-flow.mjs",
+    "audit:rider": "node scripts/rider-role-audit.mjs",
+    "screenshots": "node scripts/screenshots.mjs",
     "smoke:delivery": "node scripts/smoke-delivery-audit.mjs"
   },
   "dependencies": {

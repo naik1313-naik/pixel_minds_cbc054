@@ -468,4 +468,94 @@ describe("MediMeshLedger", () => {
       );
     });
   });
+
+  // -------------------------------------------------------------- settlements
+
+  describe("settlement audit", () => {
+    const settlementId = (s: string) => id(`settlement-${s}`);
+    const SETTLEMENT_HASH = id("settlement-metadata-v1");
+
+    it("records a settlement and reads it back", async () => {
+      const s = settlementId("s1");
+      const o = orderRef("paid-1");
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(s, o, SETTLEMENT_HASH, 9500, pharmacyA.address)
+      )
+        .to.emit(ledger, "SettlementRecorded")
+        .withArgs(s, o, pharmacyA.address, 9500, SETTLEMENT_HASH, anyValue);
+
+      const stored = await ledger.getSettlement(s);
+      expect(stored.id).to.equal(s);
+      expect(stored.orderRef).to.equal(o);
+      expect(stored.beneficiary).to.equal(pharmacyA.address);
+      expect(stored.amountPaise).to.equal(9500n);
+      expect(stored.settlementHash).to.equal(SETTLEMENT_HASH);
+      expect(stored.settledAt).to.be.greaterThan(0n);
+      expect(await ledger.settlementExists(s)).to.equal(true);
+    });
+
+    it("records who reported the settlement", async () => {
+      const s = settlementId("s-reporter");
+      await ledger.connect(rider).recordSettlement(s, orderRef("paid-r"), SETTLEMENT_HASH, 100, pharmacyA.address);
+      const stored = await ledger.getSettlement(s);
+      expect(stored.reportedBy).to.equal(rider.address);
+      // The beneficiary is still the pharmacy, not the reporter.
+      expect(stored.beneficiary).to.equal(pharmacyA.address);
+    });
+
+    it("rejects a replayed settlement reference", async () => {
+      const s = settlementId("s-replay");
+      await ledger.connect(pharmacyA).recordSettlement(s, orderRef("a"), SETTLEMENT_HASH, 100, pharmacyA.address);
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(s, orderRef("b"), SETTLEMENT_HASH, 999, pharmacyA.address)
+      ).to.be.revertedWithCustomError(ledger, "SettlementAlreadyRecorded");
+    });
+
+    it("refuses a beneficiary that is not an authorized pharmacy", async () => {
+      await expect(
+        ledger
+          .connect(pharmacyA)
+          .recordSettlement(settlementId("s-bad"), orderRef("c"), SETTLEMENT_HASH, 100, stranger.address)
+      )
+        .to.be.revertedWithCustomError(ledger, "NotPharmacy")
+        .withArgs(stranger.address);
+    });
+
+    it("refuses an unauthorized reporter", async () => {
+      await expect(
+        ledger.connect(stranger).recordSettlement(settlementId("s-str"), orderRef("d"), SETTLEMENT_HASH, 100, pharmacyA.address)
+      )
+        .to.be.revertedWithCustomError(ledger, "NotDeliveryActor")
+        .withArgs(stranger.address);
+    });
+
+    it("rejects zero amounts and empty references", async () => {
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(settlementId("s-zero"), orderRef("e"), SETTLEMENT_HASH, 0, pharmacyA.address)
+      ).to.be.revertedWithCustomError(ledger, "ZeroAmount");
+
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(ZERO, orderRef("f"), SETTLEMENT_HASH, 100, pharmacyA.address)
+      ).to.be.revertedWithCustomError(ledger, "EmptySettlementId");
+
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(settlementId("s-o"), ZERO, SETTLEMENT_HASH, 100, pharmacyA.address)
+      ).to.be.revertedWithCustomError(ledger, "EmptyOrderRef");
+
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(settlementId("s-h"), orderRef("g"), ZERO, 100, pharmacyA.address)
+      ).to.be.revertedWithCustomError(ledger, "EmptySettlementHash");
+
+      await expect(
+        ledger.connect(pharmacyA).recordSettlement(settlementId("s-z"), orderRef("h"), SETTLEMENT_HASH, 100, ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(ledger, "ZeroAddress");
+    });
+
+    it("reports an unknown settlement as absent", async () => {
+      const s = settlementId("never-recorded");
+      expect(await ledger.settlementExists(s)).to.equal(false);
+      const stored = await ledger.getSettlement(s);
+      expect(stored.settledAt).to.equal(0n);
+    });
+  });
 });

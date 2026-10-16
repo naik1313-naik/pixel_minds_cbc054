@@ -31,6 +31,7 @@ export const OPERATION_TYPE = {
   TRANSFER_CONFIRM: "transfer.confirm",
   TRANSFER_REJECT: "transfer.reject",
   DELIVERY_MILESTONE: "delivery.milestone",
+  PAYMENT_SETTLE: "payment.settle",
 } as const;
 export type OperationType = (typeof OPERATION_TYPE)[keyof typeof OPERATION_TYPE];
 
@@ -58,6 +59,11 @@ export const PERMANENT_ERROR_PREFIXES = [
   "DeliveryAlreadyDelivered",
   "InvalidMilestone",
   "ZeroAddress",
+  "EmptySettlementId",
+  "EmptyOrderRef",
+  "EmptySettlementHash",
+  "ZeroAmount",
+  "SettlementAlreadyRecorded",
 ];
 
 export interface OperationRow {
@@ -84,7 +90,7 @@ export function isPermanentFailure(message: string): boolean {
 
 export async function createOperation(input: {
   type: OperationType;
-  entityType: "batch" | "transfer" | "delivery";
+  entityType: "batch" | "transfer" | "delivery" | "payment";
   entityId: number;
   idempotencyKey?: string;
 }): Promise<OperationRow> {
@@ -187,7 +193,7 @@ export async function findOperationByIdempotencyKey(key: string): Promise<Operat
  */
 export async function findConfirmedEntityForKey(
   idempotencyKey: string,
-  table: "medicine_batches" | "batch_transfers" | "delivery_audit"
+  table: "medicine_batches" | "batch_transfers" | "delivery_audit" | "payment_audit"
 ): Promise<{ id: number } | undefined> {
   if (!/^[a-z_]+$/.test(table)) throw new Error("Invalid table name");
   return queryOne<{ id: number }>(
