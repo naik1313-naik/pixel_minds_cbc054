@@ -19,6 +19,13 @@ interface Offer {
   distance_km: number | null;
   eta_minutes: number | null;
   rx_required: number;
+  offered_at: string;
+  expires_at: string;
+}
+
+/** Seconds left to answer, floored at zero. */
+function secondsLeft(offer: Offer, now: number): number {
+  return Math.max(0, Math.round((new Date(offer.expires_at).getTime() - now) / 1000));
 }
 interface DeliveryDetail {
   delivery: { id: number; status: string; rx_required: number; distance_km: number | null; eta_minutes: number | null; destination_lat: number; destination_lng: number; destination_address: string };
@@ -66,8 +73,15 @@ export default function RiderApp({
   const [idChecked, setIdChecked] = useState(false);
   const [simRunning, setSimRunning] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Ticks once a second so offer countdowns stay honest without a reload.
+  const [now, setNow] = useState(() => Date.now());
   const simRef = useRef<number | null>(null);
   const tRef = useRef(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const refreshOffers = useCallback(async () => {
     try {
@@ -228,7 +242,9 @@ export default function RiderApp({
         <Card className="p-5">
           <h2 className="font-semibold text-slate-900">New job offers</h2>
           <div className="mt-3 space-y-3">
-            {offers.map((o) => (
+            {offers.map((o) => {
+              const left = secondsLeft(o, now);
+              return (
               <div key={o.offer_id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-100 bg-teal-50/60 p-3">
                 <div>
                   <div className="font-medium text-slate-800">{o.pharmacy_name}</div>
@@ -236,13 +252,17 @@ export default function RiderApp({
                   <div className="text-xs text-slate-500">
                     {o.distance_km?.toFixed(1)} km · ~{o.eta_minutes} min {o.rx_required ? "· Rx" : ""}
                   </div>
+                  <div className={`mt-1 text-xs font-medium ${left < 20 ? "text-rose-600" : "text-teal-700"}`}>
+                    {left > 0 ? `Expires in ${left}s` : "Expired — refreshing"}
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <Button loading={busy} onClick={() => offerAction(o.id, "accept")}>Accept</Button>
                   <Button variant="ghost" loading={busy} onClick={() => offerAction(o.id, "decline")}>Decline</Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}
@@ -307,11 +327,22 @@ export default function RiderApp({
           )}
         </Card>
       ) : (
-        <Card className="grid place-items-center p-10 text-center text-sm text-slate-400">
-          <div>
-            <Truck className="mx-auto mb-2 h-8 w-8 text-slate-300" />
-            {offers.length ? "Accept an offer to start a job." : isOnline ? "Waiting for job offers…" : "Go online to receive jobs."}
-          </div>
+        <Card className="p-10 text-center">
+          <Truck className="mx-auto mb-2 h-8 w-8 text-slate-300" />
+          {offers.length ? (
+            <p className="text-sm text-slate-400">Accept an offer to start a job.</p>
+          ) : isOnline ? (
+            <>
+              <p className="text-sm font-medium text-slate-600">You&apos;re online — waiting for jobs.</p>
+              <p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-slate-400">
+                A job appears here the moment a pharmacy marks a delivery order <strong>Ready</strong>.
+                Pickup orders never generate delivery work, so a quiet board is usually a quiet
+                pharmacy rather than a problem.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-slate-400">Go online to receive jobs.</p>
+          )}
         </Card>
       )}
     </div>

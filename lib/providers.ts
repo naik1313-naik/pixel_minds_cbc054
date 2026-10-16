@@ -28,6 +28,71 @@ export function setSmsProvider(p: SmsProvider): void {
   sms = p;
 }
 
+// ------------------------------------------------------------ notifications
+
+/**
+ * Outbound message to a person, not a system.
+ *
+ * Separate from SmsProvider on purpose: OTP delivery is a security control and
+ * must fail loudly if it does not go out, whereas an advisory "your rider is on
+ * the way" is a convenience. A delivery that goes out without the notification
+ * is still a delivery; a delivery that waits on a gateway is not.
+ */
+export interface NotificationProvider {
+  name: string;
+  notify(input: { to: string | null | undefined; message: string }): Promise<void>;
+}
+
+class ConsoleNotificationProvider implements NotificationProvider {
+  name = "console";
+  async notify(input: { to: string | null | undefined; message: string }): Promise<void> {
+    if (!input.to) return;
+    // eslint-disable-next-line no-console
+    console.log(`\n[${this.name} → ${input.to}] ${input.message}\n`);
+  }
+}
+
+/** Routes through an HTTP gateway when MM_SMS_ENDPOINT is configured. */
+function httpNotificationProvider(endpoint: string, apiKey?: string): NotificationProvider {
+  return {
+    name: "http",
+    async notify({ to, message }) {
+      if (!to) return;
+      try {
+        await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify({ to, message }),
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch {
+        // Swallowed on purpose: a notification failure must never roll back or
+        // fail the order it was describing.
+      }
+    },
+  };
+}
+
+function defaultNotificationProvider(): NotificationProvider {
+  return process.env.MM_SMS_ENDPOINT
+    ? httpNotificationProvider(process.env.MM_SMS_ENDPOINT, process.env.MM_SMS_API_KEY)
+    : new ConsoleNotificationProvider();
+}
+
+let notifications: NotificationProvider = defaultNotificationProvider();
+
+export function getNotificationProvider(): NotificationProvider {
+  return notifications;
+}
+
+/** Pass null to restore the configured default, mirroring setPaymentGateway. */
+export function setNotificationProvider(p: NotificationProvider | null): void {
+  notifications = p ?? defaultNotificationProvider();
+}
+
 export interface RouteResult {
   distanceKm: number;
   durationMinutes: number;

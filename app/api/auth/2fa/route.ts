@@ -3,6 +3,7 @@ import { z } from "zod";
 import { complete2fa, createSession } from "@/lib/auth";
 import { setSessionCookie } from "@/lib/session";
 import { json, error, clientIp, sameOrigin } from "@/lib/api-utils";
+import { rateLimit } from "@/lib/rate-limit";
 
 const schema = z.object({
   challenge: z.string().min(10).max(2000),
@@ -19,6 +20,16 @@ export async function POST(req: NextRequest) {
   }
   const parsed = schema.safeParse(body);
   if (!parsed.success) return error(400, "Invalid input");
+
+  // A 6-digit code is the weakest credential in the system, so it gets the
+  // tightest limit: six-digit space falls fast without this.
+  const limited = rateLimit(`2fa:${parsed.data.challenge}:${clientIp(req)}`, 6, 120_000);
+  if (!limited.ok) {
+    return new Response(JSON.stringify({ error: "Too many codes. Try again shortly." }), {
+      status: 429,
+      headers: { "retry-after": String(limited.retryAfterSeconds) },
+    });
+  }
 
   const ip = clientIp(req);
   const result = await complete2fa(parsed.data.challenge, parsed.data.code, { ip });

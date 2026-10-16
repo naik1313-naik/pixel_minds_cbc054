@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   Boxes,
+  ClipboardList,
   FlaskConical,
   ScrollText,
   Store,
@@ -13,6 +14,8 @@ import {
 } from "lucide-react";
 import { Badge, Button, Card, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
+import { useEventStream } from "@/lib/useEventStream";
+import ReconciliationPanel from "@/components/admin/ReconciliationPanel";
 
 interface Overview {
   counts: {
@@ -67,12 +70,45 @@ interface AuditRow {
 
 const TABS = [
   { key: "overview", label: "Overview", icon: <Activity className="h-4 w-4" /> },
+  { key: "orders", label: "Orders", icon: <ClipboardList className="h-4 w-4" /> },
   { key: "pharmacies", label: "Pharmacies", icon: <Store className="h-4 w-4" /> },
   { key: "partners", label: "Partners", icon: <Truck className="h-4 w-4" /> },
   { key: "users", label: "Users", icon: <Users className="h-4 w-4" /> },
+  { key: "outbox", label: "Write outbox", icon: <Activity className="h-4 w-4" /> },
   { key: "audit", label: "Audit log", icon: <ScrollText className="h-4 w-4" /> },
   { key: "demo", label: "Demo controls", icon: <FlaskConical className="h-4 w-4" /> },
 ] as const;
+
+/**
+ * One row per order with all three parties on it.
+ *
+ * An operator's question is never "show me orders" in the abstract — it is "who
+ * ordered this, which pharmacy is fulfilling it, and which rider has it right
+ * now". Splitting that across tabs makes the person a stuck delivery depends on
+ * invisible exactly when it matters.
+ */
+interface OrderRow {
+  request_id: number;
+  request_status: string;
+  fulfilment_type: string;
+  qty: number;
+  created_at: string;
+  customer_name: string;
+  medicine_name: string | null;
+  rx_required: number;
+  pharmacy_name: string | null;
+  delivery_status: string | null;
+  partner_name: string | null;
+  vehicle_number: string | null;
+  distance_km: number | null;
+  eta_minutes: number | null;
+  assigned_at: string | null;
+  delivered_at: string | null;
+  amount_paise: number | null;
+  payment_status: string | null;
+  pharmacy_amount_paise: number | null;
+  settlement_ref: string | null;
+}
 
 function docTone(status: string | null | undefined): "emerald" | "amber" | "rose" | "slate" {
   if (status === "verified") return "emerald";
@@ -96,6 +132,7 @@ export default function AdminConsole() {
   const [pharmacies, setPharmacies] = useState<PharmacyRow[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [orders, setOrders] = useState<OrderRow[]>([]);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -109,9 +146,31 @@ export default function AdminConsole() {
     setUsers(us.users);
   }, []);
 
+  const loadOrders = useCallback(async () => {
+    try {
+      const res = await api.get<{ orders: OrderRow[] }>("/api/admin/orders");
+      setOrders(res.orders);
+    } catch {
+      setOrders([]);
+    }
+  }, []);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    // Loaded up front, not only when the tab opens: the Orders tab is the one an
+    // operator lands on during an incident, and an empty table that fills in a
+    // second later reads as "no orders exist".
+    void loadOrders();
+  }, [loadOrders]);
+
+  // Orders change on other people's screens, so keep the operator's view current
+  // rather than making them guess whether a refresh button is needed.
+  useEventStream("/api/pharmacy/stream", () => {
+    if (tab === "orders") void loadOrders();
+  });
 
   useEffect(() => {
     if (tab === "audit") {
@@ -266,6 +325,97 @@ export default function AdminConsole() {
           ))}
         </Card>
       )}
+
+      {tab === "orders" && (
+        <Card className="overflow-x-auto p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold text-slate-900">All orders</h2>
+            <span className="text-xs text-slate-400">
+              {orders.length} shown · updates live
+            </span>
+          </div>
+          {orders.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-400">No orders yet.</p>
+          ) : (
+            <table className="mt-4 w-full text-left text-sm">
+              <thead className="text-xs uppercase text-slate-400">
+                <tr>
+                  <th className="py-2 pr-3">Order</th>
+                  <th className="py-2 pr-3">Customer</th>
+                  <th className="py-2 pr-3">Pharmacy</th>
+                  <th className="py-2 pr-3">Rider</th>
+                  <th className="py-2 pr-3">Status</th>
+                  <th className="py-2 pr-3 text-right">Paid to pharmacy</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {orders.map((o) => (
+                  <tr key={o.request_id} className="align-top">
+                    <td className="py-3 pr-3">
+                      <p className="font-medium text-slate-800">#{o.request_id}</p>
+                      <p className="text-xs text-slate-500">
+                        {o.qty} × {o.medicine_name ?? "—"}
+                        {o.rx_required ? " · Rx" : ""}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {o.fulfilment_type === "delivery" ? "delivery" : "pickup"} ·{" "}
+                        {timeAgo(o.created_at)}
+                      </p>
+                    </td>
+                    <td className="py-3 pr-3 text-slate-700">{o.customer_name}</td>
+                    <td className="py-3 pr-3 text-slate-700">
+                      {o.pharmacy_name ?? <span className="text-slate-400">unassigned</span>}
+                    </td>
+                    <td className="py-3 pr-3 text-slate-700">
+                      {o.partner_name ? (
+                        <>
+                          <p>{o.partner_name}</p>
+                          {o.vehicle_number ? (
+                            <p className="text-xs text-slate-500">{o.vehicle_number}</p>
+                          ) : null}
+                          {o.distance_km != null ? (
+                            <p className="text-xs text-slate-400">
+                              {o.distance_km.toFixed(1)} km · {o.eta_minutes} min
+                            </p>
+                          ) : null}
+                        </>
+                      ) : o.delivery_status ? (
+                        <span className="text-xs text-amber-700">searching…</span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 pr-3">
+                      <StatusPill status={o.request_status} />
+                      {o.delivery_status ? (
+                        <p className="mt-1 text-xs text-slate-500">{o.delivery_status}</p>
+                      ) : null}
+                    </td>
+                    <td className="py-3 pr-3 text-right">
+                      {o.pharmacy_amount_paise != null ? (
+                        <>
+                          <p className="font-medium text-slate-900">
+                            {formatRupees(o.pharmacy_amount_paise)}
+                          </p>
+                          <p className="text-xs text-slate-400">{o.payment_status ?? "—"}</p>
+                        </>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="mt-4 text-xs text-slate-400">
+            Customer phone numbers are not listed here. They are released only through the contact
+            flow on the order, which records each disclosure.
+          </p>
+        </Card>
+      )}
+
+      {tab === "outbox" && <ReconciliationPanel />}
 
       {tab === "partners" && (
         <Card className="divide-y divide-slate-100">
