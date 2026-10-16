@@ -613,6 +613,35 @@ export async function verifyHandover(input: {
   if (d.rx_required && !input.idChecked)
     return { ok: false, reason: "Recipient ID must be checked for prescription medicines" };
 
+  // Expiry, checked at the door rather than only at reservation. This is the
+  // last moment at which expired stock can still be refused, so it is the moment
+  // that has to check it. The rider is told plainly, because they are holding
+  // the box and need to know to take it back.
+  const stock = await queryOne<{ expiry_date: string | null; medicine_name: string }>(
+    `SELECT i.expiry_date, m.name AS medicine_name
+       FROM requests r
+       JOIN inventory i ON i.pharmacy_id = $1 AND i.medicine_id = r.medicine_id
+       JOIN medicines m ON m.id = r.medicine_id
+      WHERE r.id = $2`,
+    [d.pharmacy_id, d.request_id]
+  );
+  if (stock?.expiry_date && stock.expiry_date < new Date().toISOString().slice(0, 10)) {
+    await recordAudit({
+      actorUserId: input.userId,
+      actorRole: "delivery_partner",
+      action: "delivery.blocked_expired_stock",
+      entityType: "delivery",
+      entityId: input.deliveryId,
+      meta: { medicine: stock.medicine_name, expiry: stock.expiry_date },
+    });
+    return {
+      ok: false,
+      reason:
+        `${stock.medicine_name} expired on ${stock.expiry_date}. Do not hand it over — take it ` +
+        `back to the pharmacy.`,
+    };
+  }
+
   const expected = d.otp_hash || "";
   const got = hashOtp(input.deliveryId, input.otp);
   const match = timingSafeEqual(expected, got);

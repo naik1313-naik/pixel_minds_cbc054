@@ -674,11 +674,53 @@ export async function completeRequest(requestId: number, actor: { userId: number
   if (actor.role === "customer" && req.customer_id !== actor.userId)
     return { ok: false, reason: "Not your request" };
 
+  const expiringStock = await queryAll<{
+    pharmacy_id: number;
+    medicine_name: string;
+    expiry_date: string | null;
+  }>(
+    `SELECT DISTINCT i.pharmacy_id, m.name AS medicine_name, i.expiry_date
+       FROM reservations res
+       JOIN requests r ON r.id = res.request_id
+       JOIN inventory i
+         ON i.pharmacy_id = res.pharmacy_id AND i.medicine_id = r.medicine_id
+       JOIN medicines m ON m.id = r.medicine_id
+      WHERE res.request_id = $1 AND res.status IN ('confirmed','active')`,
+    [requestId]
+  );
+  const { today: todayText } =
+    (await queryOne<{ today: string }>("SELECT CURRENT_DATE::text AS today"))!;
+
+  // Expiry is checked again here, not only when the units were reserved. A batch
+  // can pass its expiry date while an order sits Ready, and handing over expired
+  // stock is the one mistake this whole system exists to prevent — so the check
+  // that matters is the one at the moment of dispense, not the one that happened
+  // to run first.
+  for (const row of expiringStock) {
+    if (row.expiry_date && row.expiry_date < todayText) {
+      await recordAudit({
+        actorUserId: actor.userId,
+        actorRole: actor.role,
+        action: "request.blocked_expired_stock",
+        entityType: "request",
+        entityId: requestId,
+        meta: { pharmacyId: row.pharmacy_id, medicine: row.medicine_name, expiry: row.expiry_date },
+      });
+      return {
+        ok: false as const,
+        reason:
+          `${row.medicine_name} in this order expired on ${row.expiry_date} and cannot be handed ` +
+          `over. Cancel the order and the customer is refunded automatically.`,
+      };
+    }
+  }
+
   await withTransaction(async (tx) => {
     const confirmed = await tx.all<{ id: number; pharmacy_id: number; qty: number }>(
       "SELECT * FROM reservations WHERE request_id = $1 AND status IN ('confirmed','active')",
       [requestId]
     );
+
     for (const r of confirmed) {
       await tx.run(
         `UPDATE inventory SET qty_total = GREATEST(0, qty_total - $1), qty_locked = GREATEST(0, qty_locked - $2)
