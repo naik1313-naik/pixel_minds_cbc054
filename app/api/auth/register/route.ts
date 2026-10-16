@@ -116,6 +116,6 @@ export async function POST(req: NextRequest) {
         ? "Account created. You can sign in."
         : data.role === "pharmacy_owner"
           ? "Pharmacy registered and approved. Your documents passed automated checks — you can sign in now."
-          : "You're verified as a delivery partner. You can sign in and go online now.",
+          : "Account created. An admin needs to verify you before you can take jobs — you'll be able to sign in right away.",
   });
 }

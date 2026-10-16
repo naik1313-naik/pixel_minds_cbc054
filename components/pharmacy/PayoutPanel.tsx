@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Banknote, ExternalLink, Loader2, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { Alert, Button, Card, Spinner, toast } from "@/components/ui";
-import { api } from "@/lib/client";
+import { api, formatRupees } from "@/lib/client";
 import { useEventStream } from "@/lib/useEventStream";
 
 /**
@@ -137,6 +137,8 @@ export default function PayoutPanel() {
         </div>
       </div>
 
+      <DisputeInbox />
+
       <PayoutAccountBanner account={account} onLink={linkAccount} busy={linking} />
 
       {rows.length === 0 ? (
@@ -252,6 +254,103 @@ function PayoutAccountBanner({
         {status === "submitted" ? "Check status" : "Link payout account"}
       </Button>
     </div>
+  );
+}
+
+/**
+ * Disputes raised against this pharmacy's orders.
+ *
+ * A pharmacy can answer but not decide — the operator rules. Saying so on the
+ * card avoids a reply that promises a refund nobody has authorised.
+ */
+function DisputeInbox() {
+  const [rows, setRows] = useState<
+    {
+      id: number;
+      request_id: number;
+      customer_name: string;
+      categoryLabel: string;
+      reason: string;
+      status: string;
+      response: string | null;
+      resolution: string | null;
+      recoverable_paise: number;
+    }[]
+  >([]);
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.get<{ disputes: typeof rows }>("/api/pharmacy/disputes");
+      setRows(res.disputes);
+    } catch {
+      setRows([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function reply(disputeId: number) {
+    const response = window.prompt("Reply to the customer");
+    if (!response) return;
+    setBusy(disputeId);
+    try {
+      await api.post("/api/pharmacy/disputes", { disputeId, response });
+      toast("Reply sent", "success");
+      await load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not send the reply", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="p-5">
+      <h2 className="font-semibold text-slate-900">Customer complaints ({rows.length})</h2>
+      <div className="mt-3 space-y-3">
+        {rows.map((d) => (
+          <div key={d.id} className="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-slate-800">
+                  Order #{d.request_id} · {d.categoryLabel}
+                </p>
+                <p className="text-xs text-slate-500">{d.customer_name}</p>
+              </div>
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600">{d.status}</span>
+            </div>
+            <p className="mt-2 text-sm text-slate-700">{d.reason}</p>
+            {d.status === "Open" ? (
+              <Button
+                className="mt-2 text-xs"
+                onClick={() => reply(d.id)}
+                loading={busy === d.id}
+              >
+                Reply
+              </Button>
+            ) : d.resolution ? (
+              <p className="mt-2 text-xs text-slate-600">
+                <span className="font-medium">Decision:</span> {d.resolution}
+                {d.recoverable_paise > 0 ? (
+                  <span className="mt-1 block text-amber-800">
+                    {formatRupees(d.recoverable_paise)} has been recorded as recoverable from you by
+                    an admin.
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-slate-400">
+        You can answer a complaint, but only an admin decides the outcome.
+      </p>
+    </Card>
   );
 }
 

@@ -10,6 +10,7 @@ import {
   randomDigits,
 } from "@/lib/crypto";
 import { hashPassword, verifyPassword, checkPasswordPolicy } from "@/lib/password";
+import { MIN_PASSWORD_LENGTH } from "@/lib/validation";
 
 describe("symmetric encryption", () => {
   it("round-trips and uses a random IV", () => {
@@ -40,7 +41,15 @@ describe("password hashing", () => {
 describe("password policy", () => {
   it("rejects common and short passwords", () => {
     expect(checkPasswordPolicy("password123").ok).toBe(false);
-    expect(checkPasswordPolicy("short1!A").ok).toBe(false);
+    // Below the length floor (6), and again for the other rules above.
+    expect(checkPasswordPolicy("Sh1!A").ok).toBe(false);
+  });
+  it("enforces the configured minimum length", () => {
+    // The floor is deliberately short for demo accounts, but it is still a floor:
+    // five characters is refused, six with mixed case, a digit and a symbol is
+    // accepted.
+    expect(checkPasswordPolicy("Sh1!Ax").ok).toBe(true);
+    expect(MIN_PASSWORD_LENGTH).toBe(6);
   });
   it("accepts a strong passphrase", () => {
     expect(checkPasswordPolicy("Quiet-Orchid-77-Meadow").ok).toBe(true);

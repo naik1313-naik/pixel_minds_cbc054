@@ -1,8 +1,23 @@
 import { z } from "zod";
 
+/**
+ * Minimum accepted password length.
+ *
+ * It lives here, not in lib/password.ts, because this module is imported by the
+ * sign-up form in the browser and lib/password.ts pulls in argon2 — a native
+ * server-only binding. Importing the constant from there broke the registration
+ * page with a 500.
+ *
+ * Short enough to be memorable for a demonstration account, but the length rule
+ * is not the only thing standing between an attacker and an account: mixed case,
+ * a digit, a symbol, a common-password blocklist and per-account lockout after
+ * repeated failures all still apply.
+ */
+export const MIN_PASSWORD_LENGTH = 6;
+
 export const passwordSchema = z
   .string()
-  .min(12, "Password must be at least 12 characters")
+  .min(MIN_PASSWORD_LENGTH, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`)
   .max(200);
 
 export const loginSchema = z.object({

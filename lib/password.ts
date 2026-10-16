@@ -55,6 +55,11 @@ const COMMON_PASSWORDS = new Set(
     .filter(Boolean)
 );
 
+// The floor itself lives in lib/validation.ts: this module is server-only (it
+// loads argon2's native binding) and the sign-up form reads the constant in the
+// browser.
+import { MIN_PASSWORD_LENGTH } from "./validation";
+
 export interface PasswordCheck {
   ok: boolean
   score: number; // 0-4
@@ -68,7 +73,9 @@ export function checkPasswordPolicy(
   const issues: string[] = [];
   const lower = password.toLowerCase();
 
-  if (password.length < 12) issues.push("Must be at least 12 characters");
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    issues.push(`Must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
   if (!/[a-z]/.test(password)) issues.push("Add a lowercase letter");
   if (!/[A-Z]/.test(password)) issues.push("Add an uppercase letter");
   if (!/[0-9]/.test(password)) issues.push("Add a number");

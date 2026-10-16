@@ -10,6 +10,7 @@ import { useEventStream } from "@/lib/useEventStream";
 import DeliveryAuditTimeline from "@/components/blockchain/DeliveryAuditTimeline";
 import PaymentPanel from "@/components/customer/PaymentPanel";
 import RiderContactCard from "@/components/customer/RiderContactCard";
+import DisputePanel from "@/components/customer/DisputePanel";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -195,6 +196,11 @@ export default function RequestTracker({ requestId }: { requestId: number }) {
       <PaymentPanel requestId={requestId} requestStatus={request.status} onPaid={load} />
 
       {isDelivery && <RiderContactCard requestId={requestId} />}
+
+      {/* Only once money has moved: before that a refund is a button, not a case. */}
+      {["Completed", "Cancelled"].includes(request.status) && (
+        <DisputePanel requestId={requestId} />
+      )}
 
       {pharmacy && (
         <Card className="p-5">

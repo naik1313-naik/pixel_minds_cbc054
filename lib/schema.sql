@@ -378,6 +378,33 @@ CREATE TABLE IF NOT EXISTS payments (
 -- Blockchain audit trail for a settled payment. Mirrors delivery_audit: the
 -- chain proves *that* a settlement was reported by an authorized actor and
 -- when, never that the underlying bank transfer was genuine.
+-- Disputes, for when a customer is not satisfied *after* the money has moved.
+--
+-- A refund only works while the payment is still refundable. Once the payout
+-- has been released to the pharmacy, returning the money is a recovery from the
+-- pharmacy, not a gateway call — so it is recorded as an obligation rather than
+-- faked as a successful refund. `recoverable_paise` is what the pharmacy owes
+-- MediMesh if a dispute resolves in the customer's favour.
+CREATE TABLE IF NOT EXISTS disputes (
+  id SERIAL PRIMARY KEY,
+  request_id INTEGER NOT NULL REFERENCES requests(id),
+  payment_id INTEGER REFERENCES payments(id),
+  raised_by INTEGER REFERENCES users(id),
+  raised_by_role TEXT NOT NULL,
+  category TEXT NOT NULL,             -- not_delivered | wrong_item | damaged | overcharged | other
+  reason TEXT NOT NULL,               -- the customer's own words
+  status TEXT NOT NULL DEFAULT 'Open',-- Open | Responded | RefundApproved | Rejected | Withdrawn
+  response TEXT,                      -- pharmacy's reply
+  responded_by INTEGER REFERENCES users(id),
+  responded_at TEXT,
+  resolution TEXT,                    -- admin's decision note
+  resolved_by INTEGER REFERENCES users(id),
+  resolved_at TEXT,
+  recoverable_paise INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS payment_audit (
   id SERIAL PRIMARY KEY,
   payment_id INTEGER NOT NULL REFERENCES payments(id),
@@ -422,6 +449,11 @@ CREATE INDEX IF NOT EXISTS idx_bc_ops_entity ON blockchain_operations (entity_ty
 CREATE INDEX IF NOT EXISTS idx_payments_pharmacy ON payments (pharmacy_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments (status);
 CREATE INDEX IF NOT EXISTS idx_payment_audit_payment ON payment_audit (payment_id);
+-- Dispute indexes.
+CREATE INDEX IF NOT EXISTS idx_disputes_request ON disputes (request_id);
+CREATE INDEX IF NOT EXISTS idx_disputes_status ON disputes (status);
+CREATE INDEX IF NOT EXISTS idx_disputes_payment ON disputes (payment_id);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_audit_settled
   ON payment_audit (payment_id) WHERE status = 'Settled';
 
@@ -472,3 +504,4 @@ SELECT setval(pg_get_serial_sequence('login_attempts','id'), COALESCE((SELECT MA
 SELECT setval(pg_get_serial_sequence('recovery_codes','id'), COALESCE((SELECT MAX(id) FROM recovery_codes), 1));
 SELECT setval(pg_get_serial_sequence('payments','id'), COALESCE((SELECT MAX(id) FROM payments), 1));
 SELECT setval(pg_get_serial_sequence('payment_audit','id'), COALESCE((SELECT MAX(id) FROM payment_audit), 1));
+SELECT setval(pg_get_serial_sequence('disputes','id'), COALESCE((SELECT MAX(id) FROM disputes), 1));

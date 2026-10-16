@@ -223,6 +223,9 @@ export default function RiderApp({
   const status = detail?.delivery.status;
   const atDestination = status === "ArrivedAtDestination";
   const awaitingApproval = status === "AwaitingPharmacyApproval";
+  // A partner waiting on an admin decision cannot take jobs, so the console says
+  // so instead of offering a Go online button that the server will refuse.
+  const pendingVerification = partnerStatus === "pending";
 
   return (
     <div className="space-y-5">
@@ -233,10 +236,21 @@ export default function RiderApp({
             Delivery partner <Badge tone={partnerStatus === "verified" ? "emerald" : "amber"}>{partnerStatus}</Badge>
           </div>
         </div>
-        <Button variant={isOnline ? "danger" : "primary"} onClick={toggleOnline}>
-          {isOnline ? <><Square className="h-4 w-4" /> Go offline</> : <><Play className="h-4 w-4" /> Go online</>}
-        </Button>
+        {!pendingVerification ? (
+          <Button variant={isOnline ? "danger" : "primary"} onClick={toggleOnline}>
+            {isOnline ? <><Square className="h-4 w-4" /> Go offline</> : <><Play className="h-4 w-4" /> Go online</>}
+          </Button>
+        ) : null}
       </div>
+
+      {pendingVerification ? (
+        <Alert kind="info">
+          <span>
+            Your documents were accepted, but an admin still has to verify you before you can take
+            jobs. You will be able to go online as soon as that is done — no need to sign up again.
+          </span>
+        </Alert>
+      ) : null}
 
       {offers.length > 0 && (
         <Card className="p-5">

@@ -363,8 +363,13 @@ export async function registerUser(input: RegisterInput): Promise<RegisterResult
   }
 
   const hash = await hashPassword(input.password);
-  // New delivery partners are approved automatically — no admin gate.
-  const partnerStatus = input.role === "delivery_partner" ? "verified" : null;
+  // New delivery partners start UNVERIFIED and wait for an admin decision.
+  //
+  // This used to auto-approve, which is the last thing a rider role should do
+  // by default: a rider is handed the customer's address, the medicine and the
+  // handover OTP. A checksum-valid document number is not a person, so the
+  // approval has to be a human one. Admins decide from the Partners tab.
+  const partnerStatus = input.role === "delivery_partner" ? "pending" : null;
   const row = (await queryReturning<{ id: number }>(
     `INSERT INTO users (email, name, phone, password_hash, role, pharmacy_id, vehicle_number, id_type, id_last4, id_number_enc, doc_status, doc_checked_at, doc_meta_json, partner_status, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)

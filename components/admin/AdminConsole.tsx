@@ -8,6 +8,7 @@ import {
   ClipboardList,
   FlaskConical,
   ScrollText,
+  Scale,
   Store,
   Truck,
   Users,
@@ -16,6 +17,7 @@ import { Badge, Button, Card, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
 import { useEventStream } from "@/lib/useEventStream";
 import ReconciliationPanel from "@/components/admin/ReconciliationPanel";
+import DisputeQueue from "@/components/admin/DisputeQueue";
 
 interface Overview {
   counts: {
@@ -74,6 +76,7 @@ const TABS = [
   { key: "pharmacies", label: "Pharmacies", icon: <Store className="h-4 w-4" /> },
   { key: "partners", label: "Partners", icon: <Truck className="h-4 w-4" /> },
   { key: "users", label: "Users", icon: <Users className="h-4 w-4" /> },
+  { key: "disputes", label: "Disputes", icon: <Scale className="h-4 w-4" /> },
   { key: "outbox", label: "Write outbox", icon: <Activity className="h-4 w-4" /> },
   { key: "audit", label: "Audit log", icon: <ScrollText className="h-4 w-4" /> },
   { key: "demo", label: "Demo controls", icon: <FlaskConical className="h-4 w-4" /> },
@@ -414,6 +417,8 @@ export default function AdminConsole() {
           </p>
         </Card>
       )}
+
+      {tab === "disputes" && <DisputeQueue />}
 
       {tab === "outbox" && <ReconciliationPanel />}
 

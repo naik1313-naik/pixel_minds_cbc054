@@ -231,6 +231,7 @@ export async function resetDemo(): Promise<void> {
 
     -- Order children.
     DELETE FROM reservations;
+    DELETE FROM disputes;
     DELETE FROM payments;
     DELETE FROM requests;
 

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Alert, Button, Card, Input } from "@/components/ui";
+import { MIN_PASSWORD_LENGTH } from "@/lib/validation";
 import { api } from "@/lib/client";
 
 type Role = "customer" | "pharmacy_owner" | "delivery_partner";
@@ -216,7 +217,7 @@ export default function RegisterForm({ role }: { role: Role }) {
             </div>
           )}
 
-          <Input label="Password" type="password" required value={form.password} onChange={set("password")} placeholder="At least 12 characters, mixed case, number, symbol" />
+          <Input label="Password" type="password" required value={form.password} onChange={set("password")} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters, mixed case, number, symbol`} />
           <Input label="Confirm password" type="password" required value={form.confirm} onChange={set("confirm")} placeholder="Re-enter password" />
 
           <Button type="submit" loading={loading} className="w-full">Create account</Button>
