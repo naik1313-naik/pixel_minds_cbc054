@@ -25,12 +25,19 @@ export default defineConfig({
     // The reset runs before `next dev`, because Playwright starts the server
     // before globalSetup — resetting afterwards would drop the schema underneath
     // a live connection pool.
+    //
+    // The reset seeds into .e2e-data itself, so the directory must not be
+    // deleted afterwards: doing so threw away the freshly written demo
+    // credentials and every signed-in test failed with "credentials file
+    // missing", which reads like an auth bug rather than a file-ordering one.
     command:
-      "node scripts/e2e-reset.mjs && rm -rf .e2e-data && DATABASE_URL=postgresql://localhost/medimesh_e2e DATABASE_SSL=false MM_DATA_DIR=.e2e-data DEMO_MODE=1 MM_QUIET=1 npx next dev -p " +
+      "MM_DATA_DIR=.e2e-data node scripts/e2e-reset.mjs && DATABASE_URL=postgresql://localhost/medimesh_e2e DATABASE_SSL=false MM_DATA_DIR=.e2e-data DEMO_MODE=1 MM_QUIET=1 npx next dev -p " +
       PORT,
     url: BASE_URL,
     reuseExistingServer: false,
-    timeout: 120_000,
+    // The reset now seeds the whole database before the server starts, so the
+    // budget covers a full schema + seed pass as well as Next's first compile.
+    timeout: 240_000,
     stdout: "ignore",
     stderr: "pipe",
   },

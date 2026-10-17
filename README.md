@@ -50,6 +50,38 @@ use the e2e/acceptance helpers which compute codes automatically.
 > without secrets** — see [Secrets](#secrets). Dev auto-generates throwaway secrets under
 > `data/.dev-secrets.json`.
 
+### Optional: the blockchain audit layer
+
+The app runs without it. To switch it on:
+
+```bash
+npm run chain:node        # terminal 1 — local Hardhat EVM on 127.0.0.1:8545
+npm run chain:deploy      # terminal 2 — deploys the ledger, writes deployments/local.json
+npm run abi:generate      # the server reads a generated ABI, not the manifest
+npm run db:reset          # re-seeds and re-maps on-chain wallets to the new users
+```
+
+`npm run db:reset` maps wallets automatically. After a contract change, `abi:generate` is not
+optional: the server builds its contract interface from `lib/blockchain/abi.generated.json`, so a
+stale copy produces `no matching function` on exactly the call you just added — which looks like a
+chain problem and is not.
+
+---
+
+## Screens
+
+| | |
+|---|---|
+| ![Sign-in with one-tap demo personas](docs/images/02-signin.png) | ![Pharmacy console](docs/images/04-pharmacy-console.png) |
+| One-tap demo sign-in — no password, no OTP for the demo personas | Pharmacy console: batches, stock, peers, payouts |
+| ![Customer catalogue](docs/images/03-customer-catalogue.png) | ![Admin operations](docs/images/05-admin-operations.png) |
+| Customer: ranked availability across nearby pharmacies | Admin: who ordered, from which pharmacy, with which rider |
+| ![Rider earnings](docs/images/08-rider-earnings.png) | ![Admin reconciliation](docs/images/06-admin-reconciliation.png) |
+| Rider earnings — paid, and earned-but-not-yet-paid, kept apart | Write outbox: every chain operation and its outcome |
+
+Regenerate with `npx playwright test e2e/screenshots.spec.ts --project=desktop`. The rider screen
+is captured after a real delivery is driven through the API, so the figures in it are real.
+
 ---
 
 ## Pages & apps (by role)
@@ -185,6 +217,14 @@ comparison or gateway call, with `429` and a `Retry-After` header. A 6-digit cod
 is the weakest credential in the system and gets the tightest limit. This slows
 guessing down; it is not the security boundary, and the code says so.
 
+The counters live in **Postgres, not in process memory**. The deploy target is
+serverless: a cold start used to hand every attacker a brand-new allowance, and two
+concurrent instances could both admit a request the other had just refused. The
+increment and the expired-window reset happen in one statement, because a
+read-then-write races and admits both. If the database is unreachable the limiter
+degrades to a process-local map rather than throwing — a weakened limiter still
+slows guessing down; an outage that locks every customer out does not.
+
 **Refunds and disputes.** A pharmacy or admin can refund a payment **while the
 money is still ours to return** — captured but not yet paid out. Once the payout
 has been released, the route refuses with a clear reason rather than half-
@@ -192,6 +232,26 @@ performing: reversing a settled payment is money owed in the *opposite*
 direction, which needs a person and a dispute, not a button. That guard lives in
 the domain function, not the route, because the refund path has more than one
 caller. Refunds are idempotent, and the customer is notified.
+
+**Disputes.** A customer can report a problem on a paid order; the pharmacy can
+reply; **only an admin decides the outcome**. An upheld refund does one of two
+honest things, and the UI says which: while the payment is still captured it is a
+real gateway refund; once the pharmacy has been paid it records
+`recoverable_paise` — an amount the pharmacy owes MediMesh, recovered offline. No
+gateway call is attempted in the second case and no surface claims money moved.
+
+**Rider approval is a human decision.** A rider is handed the customer's address,
+the medicine and the handover OTP, so registration leaves `partner_status =
+pending` and an admin approves from the Partners tab. This used to auto-approve on
+a checksum-valid document number, which is not a person. A pending rider sees an
+explanation instead of a "Go online" button the server would refuse.
+
+**Expired stock is refused at the moment of dispense.** Availability queries hide
+expired batches, but a batch can pass its date while an order sits Ready, so both
+dispense paths re-check: pickup completion refuses and audits
+`request.blocked_expired_stock`; delivery handover refuses *before* the OTP is
+compared and tells the rider to take the box back, because they are holding it.
+Without those checks the earlier filtering was theatre.
 
 **Write outbox (admin).** Every blockchain write is persisted before submission,
 so a crash leaves a row rather than a mystery. That guarantee is invisible unless
@@ -298,12 +358,43 @@ Flow:
 4. When the order is **fulfilled** (pickup collected, or delivery handed over with OTP + geofence), the
    payment is marked `PaidOut` and the settlement is anchored on-chain.
 
+### Who gets what
+
+| | Pickup | Delivery |
+|---|---|---|
+| Order total | medicine price | medicine price **+ ₹25 delivery fee** |
+| Pharmacy owner | medicine − 5% platform fee | medicine − 5% platform fee |
+| Rider | — | the full delivery fee |
+| MediMesh | 5% of the medicine | 5% of the medicine |
+
+The platform fee is charged on the **medicine amount only**. Taking a cut of the delivery fee would be
+money taken out of the rider's pay for a service MediMesh did not provide, and at these amounts it
+would leave the rider with roughly one rupee.
+
+**When the rider is paid, stated precisely because it is easy to overstate.** The customer pays before
+a rider has been assigned, so at capture there is no account to transfer the fee to. It is transferred
+after the verified handover, straight to the rider's own linked account. Between capture and handover
+the fee rests in the platform balance — owed to the rider the whole time and never MediMesh revenue,
+but not yet in the rider's bank account. The rider's earnings panel therefore shows **two** figures,
+"paid to your account" and "earned, not yet paid out", rather than one combined number that would
+promise money that has not moved.
+
 Anchoring is append-only: a settlement reference can be recorded once, the beneficiary must hold
 `PHARMACY_ROLE`, and the receipt reads back the same metadata hash it was written with.
+
+The rider's fee is anchored separately, through `recordRiderSettlement`, keyed and replay-guarded
+independently of the pharmacy's anchor. Two anchors rather than one record with two amounts is
+deliberate: neither party's amount can then be invalidated by a dispute about the other, and each has
+its own beneficiary role check (`DELIVERY_ROLE` for the rider).
 
 > **Scope of the anchor.** It proves an authorized pharmacy wallet *reported* the settlement and that
 > the record has not changed. It is not a bank statement — the gateway is the evidence of money. A
 > chain outage never blocks a delivery; it only defers the anchor, which the reconcile job picks up.
+
+> **Refunds after payout.** A refund is only possible while the payment is still captured. Once a
+> pharmacy has been paid, returning the money means recovering it from them, so
+> `/api/requests/[id]/refund` says so and points at the dispute flow, which records the amount as an
+> obligation instead of pretending a refund happened.
 
 ### Public settlement verification
 
@@ -446,15 +537,28 @@ ID (DL or a Verhoeff-valid Aadhaar), so the admin console shows green document b
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (next/core-web-vitals)
-npm test            # vitest — engine, delivery, auth, security, identity/providers, payments, demo-login, contact/admin, enhancements, blockchain (173 tests)
+npm test            # vitest — engine, delivery, auth, security, identity/providers, payments, disputes, expiry, rider-earnings, demo-login, contact/admin, enhancements, blockchain (203 tests)
 npm run acceptance  # end-to-end API script (needs a running server: BASE=http://localhost:3000)
 npm run e2e:install # one-time: download Chromium for Playwright
-npm run e2e         # Playwright e2e, desktop + mobile
+npm run e2e         # Playwright e2e, desktop + mobile (20 tests)
 npm run build       # production build
 npm run db:inspect  # print migrations, row counts, pharmacy/partner verification
 npm run db:migrate  # apply schema.sql now (idempotent; no restart needed)
-npm run db:reset    # delete the DB so the next app start reseeds it
+npm run db:reset    # reset + reseed, and re-map the on-chain wallets
 ```
+
+Live smoke scripts, all of which need the dev server and chain running:
+
+```bash
+npm run smoke:payments        # order -> pay -> settle -> on-chain anchor
+npm run smoke:delivery-assign # offer -> accept -> approve -> track -> handover
+npm run smoke:rider-earnings  # the whole delivery fee path, both chain anchors
+npm run audit:rider           # 30-check rider-role audit
+```
+
+`npm run smoke:rider-earnings` is the one that exercises the split properly: it asserts that the
+pharmacy's share excludes the delivery fee, that the rider is paid exactly once at handover, and
+that the pharmacy's anchor and the rider's anchor are two different transactions.
 
 `scripts/acceptance.mjs` drives the full lifecycle — customer search → request → pharmacy
 confirm/ready → rider accept/advance/location → customer demo-OTP reveal → rider handover →
