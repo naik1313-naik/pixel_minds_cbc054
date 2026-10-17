@@ -11,7 +11,7 @@
  * documentation job, not a test, and a pixel-perfect comparison would make it
  * fail every time a font or a card border changed.
  */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 
@@ -22,12 +22,12 @@ test.beforeAll(() => {
 });
 
 /** Signs in through the demo one-tap persona, the way a judge would. */
-async function loginAs(page, key: string) {
+async function loginAs(page: Page, key: string) {
   await page.goto("/login");
   const button = page.getByRole("button", { name: new RegExp(key, "i") }).first();
   await expect(button).toBeVisible();
   await button.click();
-  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 20_000 });
+  await page.waitForURL((url: URL) => !url.pathname.includes("/login"), { timeout: 20_000 });
 }
 
 test("capture the README screens", async ({ page, browser }) => {

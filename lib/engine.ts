@@ -50,6 +50,10 @@ export interface Medicine {
   salt: string;
   price_paise: number;
   rx_required: number;
+  synonyms: string | null;
+  category: string | null;
+  strength: string | null;
+  dosage_form: string | null;
 }
 
 const LOCK_DEFAULT_SECONDS = 1800; // 30 minutes

@@ -533,6 +533,18 @@ CREATE INDEX IF NOT EXISTS idx_delivery_offers_delivery ON delivery_offers (deli
 --
 -- All statements are idempotent, so this block is safe to re-run.
 -- =============================================================
+-- Catalogue fields the search brain needs.
+--
+-- Added as ALTERs, not inline: CREATE TABLE IF NOT EXISTS is a no-op on an
+-- existing table, so an inline addition never reaches a deployed database and
+-- only fails at runtime.
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS synonyms TEXT;        -- comma separated
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS category TEXT;        -- Analgesic, Antibiotic...
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS strength TEXT;        -- "500mg"
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS dosage_form TEXT;    -- Tablet, Syrup, Gel
+CREATE INDEX IF NOT EXISTS idx_medicines_category ON medicines (category);
+CREATE INDEX IF NOT EXISTS idx_medicines_salt ON medicines (LOWER(salt));
+
 ALTER TABLE payment_audit ADD COLUMN IF NOT EXISTS metadata_json TEXT;
 
 -- Seed data is inserted with explicit ids, so sequences must be realigned.
