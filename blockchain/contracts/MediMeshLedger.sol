@@ -161,6 +161,15 @@ contract MediMeshLedger is AccessControl, ReentrancyGuard {
     // ---------------------------------------------------------------- errors
 
     error NotAdmin(address caller);
+    event RiderSettlementRecorded(
+        bytes32 indexed settlementId,
+        bytes32 indexed orderRef,
+        address indexed beneficiary,
+        uint256 amountPaise,
+        bytes32 settlementHash,
+        uint64 settledAt
+    );
+
     error NotPharmacy(address caller);
     error NotDeliveryActor(address caller);
     error EmptyBatchId();
@@ -526,6 +535,58 @@ contract MediMeshLedger is AccessControl, ReentrancyGuard {
         });
 
         emit SettlementRecorded(
+            settlementId,
+            orderRef,
+            beneficiary,
+            amountPaise,
+            settlementHash,
+            uint64(block.timestamp)
+        );
+    }
+
+    /**
+     * @notice Record that a delivery fee was routed to a rider.
+     *
+     * @dev A separate function, and a separate reference, rather than extra
+     *      fields on the pharmacy settlement: the fee is a different payment to a
+     *      different party, and giving it its own id keeps each anchor replay-
+     *      guarded on its own. Bundling them into one record would mean the
+     *      pharmacy's amount and the rider's amount could never be proven
+     *      independently, and a dispute about one would invalidate the other.
+     *
+     *      As with `recordSettlement`, this is an audit anchor and not a payment
+     *      rail: the contract cannot prove a bank transfer happened.
+     *
+     *      The beneficiary must hold DELIVERY_ROLE, so a fee can only ever be
+     *      attributed to a rider this contract has authorized.
+     */
+    function recordRiderSettlement(
+        bytes32 settlementId,
+        bytes32 orderRef,
+        bytes32 settlementHash,
+        uint256 amountPaise,
+        address beneficiary
+    ) external onlyDeliveryActor nonReentrant {
+        if (settlementId == bytes32(0)) revert EmptySettlementId();
+        if (orderRef == bytes32(0)) revert EmptyOrderRef();
+        if (settlementHash == bytes32(0)) revert EmptySettlementHash();
+        if (amountPaise == 0) revert ZeroAmount();
+        if (beneficiary == address(0)) revert ZeroAddress();
+        if (!hasRole(DELIVERY_ROLE, beneficiary)) revert NotDeliveryActor(beneficiary);
+        // Append-only, on its own key.
+        if (_settlements[settlementId].settledAt != 0) revert SettlementAlreadyRecorded(settlementId);
+
+        _settlements[settlementId] = Settlement({
+            id: settlementId,
+            orderRef: orderRef,
+            beneficiary: beneficiary,
+            amountPaise: amountPaise,
+            settlementHash: settlementHash,
+            settledAt: uint64(block.timestamp),
+            reportedBy: msg.sender
+        });
+
+        emit RiderSettlementRecorded(
             settlementId,
             orderRef,
             beneficiary,

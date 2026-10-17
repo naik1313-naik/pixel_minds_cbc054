@@ -529,6 +529,54 @@ describe("MediMeshLedger", () => {
         .withArgs(stranger.address);
     });
 
+    it("anchors a rider fee separately from the pharmacy settlement", async () => {
+      const riderId = settlementId("s-rider");
+      const o = orderRef("delivered-1");
+      await expect(
+        ledger.connect(rider).recordRiderSettlement(riderId, o, SETTLEMENT_HASH, 2500, rider.address)
+      )
+        .to.emit(ledger, "RiderSettlementRecorded")
+        .withArgs(riderId, o, rider.address, 2500, SETTLEMENT_HASH, anyValue);
+
+      const stored = await ledger.getSettlement(riderId);
+      expect(stored.beneficiary).to.equal(rider.address);
+      expect(stored.amountPaise).to.equal(2500n);
+
+      // The pharmacy's anchor is a different key, so neither invalidates the
+      // other: a dispute about one amount leaves the other still provable.
+      const pharmacyId = settlementId("s-pharmacy");
+      await ledger.connect(rider).recordSettlement(pharmacyId, o, SETTLEMENT_HASH, 9500, pharmacyA.address);
+      expect((await ledger.getSettlement(riderId)).amountPaise).to.equal(2500n);
+      expect((await ledger.getSettlement(pharmacyId)).amountPaise).to.equal(9500n);
+    });
+
+    it("refuses to pay a rider fee to a pharmacy that is not a rider", async () => {
+      await expect(
+        ledger
+          .connect(rider)
+          .recordRiderSettlement(settlementId("s-r-bad"), orderRef("i"), SETTLEMENT_HASH, 2500, pharmacyA.address)
+      )
+        .to.be.revertedWithCustomError(ledger, "NotDeliveryActor")
+        .withArgs(pharmacyA.address);
+    });
+
+    it("refuses to pay a rider fee to an unauthorized wallet", async () => {
+      await expect(
+        ledger
+          .connect(rider)
+          .recordRiderSettlement(settlementId("s-r-str"), orderRef("j"), SETTLEMENT_HASH, 2500, stranger.address)
+      )
+        .to.be.revertedWithCustomError(ledger, "NotDeliveryActor");
+    });
+
+    it("rejects a replayed rider fee reference", async () => {
+      const s = settlementId("s-r-replay");
+      await ledger.connect(rider).recordRiderSettlement(s, orderRef("k"), SETTLEMENT_HASH, 2500, rider.address);
+      await expect(
+        ledger.connect(rider).recordRiderSettlement(s, orderRef("l"), SETTLEMENT_HASH, 999, rider.address)
+      ).to.be.revertedWithCustomError(ledger, "SettlementAlreadyRecorded");
+    });
+
     it("rejects zero amounts and empty references", async () => {
       await expect(
         ledger.connect(pharmacyA).recordSettlement(settlementId("s-zero"), orderRef("e"), SETTLEMENT_HASH, 0, pharmacyA.address)

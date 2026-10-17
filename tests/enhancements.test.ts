@@ -91,14 +91,15 @@ describe("rate limiting", () => {
   });
 
   it("resets once the window passes", async () => {
-    expect((await rateLimit("short", 1, 1)).ok).toBe(true);
-    expect((await rateLimit("short", 1, 1)).ok).toBe(false);
-    // Window is 1ms; a fresh attempt after it elapses is served normally.
-    const past = Date.now() + 5;
-    while (Date.now() < past) {
-      /* spin briefly */
-    }
-    expect((await rateLimit("short", 1, 1)).ok).toBe(true);
+    // A 1ms window cannot be tested reliably against a database round-trip: the
+    // window can lapse between the two calls and the "blocked" assertion fails
+    // for reasons that have nothing to do with the logic under test. 400ms is
+    // short enough to keep the suite quick and long enough to be deterministic.
+    const WINDOW = 400;
+    expect((await rateLimit("short", 1, WINDOW)).ok).toBe(true);
+    expect((await rateLimit("short", 1, WINDOW)).ok).toBe(false);
+    await new Promise((r) => setTimeout(r, WINDOW + 150));
+    expect((await rateLimit("short", 1, WINDOW)).ok).toBe(true);
   });
 
   it("counts keys independently", async () => {

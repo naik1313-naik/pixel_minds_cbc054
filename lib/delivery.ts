@@ -18,7 +18,7 @@ import { randomDigits, sha256Hex, timingSafeEqual, encryptSecret, decryptSecret 
 import { recordAudit } from "./audit";
 import { publish, channels } from "./sse";
 import { getSmsProvider, getNotificationProvider } from "./providers";
-import { settlePaymentForRequest } from "./payments";
+import { settlePaymentForRequest, settleRiderPayout } from "./payments";
 import { isDemoMode } from "./demo";
 
 const OFFER_WINDOW_SECONDS = 30;
@@ -686,14 +686,15 @@ export async function verifyHandover(input: {
   await finalizeDeliveredRequest(d.request_id, {
     userId: input.userId,
     role: "delivery_partner",
-  });
+  }, input.deliveryId);
   return { ok: true, delivery: await getDelivery(input.deliveryId) };
 }
 
 // Marks the underlying request Completed and commits the reserved stock.
 async function finalizeDeliveredRequest(
   requestId: number,
-  actor: { userId: number; role: string }
+  actor: { userId: number; role: string },
+  deliveryId?: number
 ): Promise<void> {
   await withTransaction<{ ok: boolean }>(async (tx) => {
     const req = (await tx.one("SELECT * FROM requests WHERE id = $1", [requestId])) as
@@ -723,6 +724,28 @@ async function finalizeDeliveredRequest(
   // Verified handover completes the sale, so the pharmacy owner's share is
   // released. Idempotent, and a chain outage here never blocks the delivery.
   await settlePaymentForRequest(requestId, actor);
+
+  // The rider's delivery fee is paid out here rather than at capture, because at
+  // capture no rider has been assigned yet. If the payout fails the delivery
+  // still counts as completed — stranding a customer at the door over a
+  // transfer error would be the worse outcome — and the failure is recorded for
+  // the operator instead.
+  if (deliveryId) {
+    try {
+      await settleRiderPayout(deliveryId, actor);
+    } catch (e) {
+      await recordAudit({
+        actorUserId: actor.userId,
+        actorRole: actor.role,
+        action: "payment.rider_payout_failed",
+        entityType: "delivery",
+        entityId: deliveryId,
+        meta: { message: e instanceof Error ? e.message.slice(0, 300) : "unknown" },
+      });
+      // eslint-disable-next-line no-console
+      console.error("rider payout failed", e);
+    }
+  }
 }
 
 // The OTP is numeric; only the assigned rider's active delivery exposes its hash state.

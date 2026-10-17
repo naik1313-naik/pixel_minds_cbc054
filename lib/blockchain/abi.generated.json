@@ -494,6 +494,49 @@
       {
         "indexed": true,
         "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "orderRef",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "beneficiary",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amountPaise",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "settlementHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "settledAt",
+        "type": "uint64"
+      }
+    ],
+    "name": "RiderSettlementRecorded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
         "name": "role",
         "type": "bytes32"
       },
@@ -1170,6 +1213,39 @@
       }
     ],
     "name": "recordDeliveryEvent",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "settlementId",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "orderRef",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "settlementHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountPaise",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "beneficiary",
+        "type": "address"
+      }
+    ],
+    "name": "recordRiderSettlement",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

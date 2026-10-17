@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import { Locate, Navigation, Package, Play, Square, Truck } from "lucide-react";
 import { Alert, Badge, Button, Card, Input, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees } from "@/lib/client";
+import { DELIVERY_FEE_PAISE } from "@/lib/constants";
+import RiderEarnings from "@/components/rider/RiderEarnings";
 import { useEventStream } from "@/lib/useEventStream";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
@@ -252,6 +254,8 @@ export default function RiderApp({
         </Alert>
       ) : null}
 
+      {!pendingVerification ? <RiderEarnings /> : null}
+
       {offers.length > 0 && (
         <Card className="p-5">
           <h2 className="font-semibold text-slate-900">New job offers</h2>
@@ -337,7 +341,7 @@ export default function RiderApp({
             </div>
           )}
           {detail.delivery.distance_km != null && (
-            <p className="mt-2 text-xs text-slate-400">{detail.delivery.distance_km.toFixed(1)} km · ~{detail.delivery.eta_minutes} min · fare {formatRupees(5000)}</p>
+            <p className="mt-2 text-xs text-slate-400">{detail.delivery.distance_km.toFixed(1)} km · ~{detail.delivery.eta_minutes} min · fare {formatRupees(DELIVERY_FEE_PAISE)}</p>
           )}
         </Card>
       ) : (

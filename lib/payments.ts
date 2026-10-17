@@ -20,7 +20,7 @@
  *    delivery) and both call settlePaymentForRequest.
  */
 import { queryAll, queryOne, queryRun, queryReturning, nowIso } from "./db";
-import { PLATFORM_FEE_RATE, rupees } from "./constants";
+import { DELIVERY_FEE_PAISE, PLATFORM_FEE_RATE, rupees } from "./constants";
 import { recordAudit } from "./audit";
 import { channels, publish } from "./sse";
 import { getNotificationProvider } from "./providers";
@@ -33,7 +33,7 @@ import {
   METADATA_SCHEMA_VERSION,
   type SettlementMetadata,
 } from "./blockchain/hashes";
-import { recordSettlementOnChain } from "./blockchain/settlements";
+import { recordRiderSettlementOnChain, recordSettlementOnChain } from "./blockchain/settlements";
 
 export const PAYMENT_STATUS = {
   CREATED: "Created",
@@ -63,6 +63,11 @@ export interface PaymentRow {
   amount_paise: number;
   platform_fee_paise: number;
   pharmacy_amount_paise: number;
+  rider_user_id: number | null;
+  rider_amount_paise: number;
+  rider_account_id: string | null;
+  rider_transfer_id: string | null;
+  rider_paid_out_at: string | null;
   currency: string;
   gateway: string;
   status: PaymentStatus;
@@ -146,6 +151,7 @@ export async function createIntent(requestId: number): Promise<PaymentRow> {
     secured_qty: number;
     preferred_pharmacy_id: number | null;
     amount_paise: number | null;
+    fulfilment_type: string;
     status: string;
   }>("SELECT * FROM requests WHERE id = $1", [requestId]);
   if (!req) throw new PaymentError("Request not found", 404);
@@ -162,16 +168,22 @@ export async function createIntent(requestId: number): Promise<PaymentRow> {
   );
   if (!medicine) throw new PaymentError("Medicine not found", 404);
 
-  const amountPaise = medicine.price_paise * billableQty;
-  if (amountPaise <= 0) throw new PaymentError("Order total is zero", 422);
-  const { platformFeePaise, pharmacyAmountPaise } = splitAmount(amountPaise);
+  const medicineAmountPaise = medicine.price_paise * billableQty;
+  if (medicineAmountPaise <= 0) throw new PaymentError("Order total is zero", 422);
+
+  // The delivery fee is charged only when the medicine is actually being
+  // delivered, and it belongs to the rider rather than the pharmacy — so the
+  // platform fee is charged on the medicine amount alone.
+  const deliveryFeePaise = req.fulfilment_type === "delivery" ? DELIVERY_FEE_PAISE : 0;
+  const { platformFeePaise, pharmacyAmountPaise } = splitAmount(medicineAmountPaise);
+  const amountPaise = medicineAmountPaise + deliveryFeePaise;
 
   const now = nowIso();
   const row = await queryReturning<PaymentRow>(
     `INSERT INTO payments
        (request_id, customer_id, pharmacy_id, amount_paise, platform_fee_paise, pharmacy_amount_paise,
-        currency, gateway, status, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'INR', $7, $8, $9, $9)
+        rider_amount_paise, currency, gateway, status, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'INR', $8, $9, $10, $10)
      RETURNING *`,
     [
       requestId,
@@ -180,14 +192,17 @@ export async function createIntent(requestId: number): Promise<PaymentRow> {
       amountPaise,
       platformFeePaise,
       pharmacyAmountPaise,
+      deliveryFeePaise,
       getPaymentGateway().name,
       PAYMENT_STATUS.AWAITING,
       now,
     ]
   );
   await queryRun(
-    "UPDATE requests SET amount_paise = $1, platform_fee_paise = $2, payment_status = $3 WHERE id = $4",
-    [amountPaise, platformFeePaise, PAYMENT_STATUS.AWAITING, requestId]
+    `UPDATE requests SET amount_paise = $1, platform_fee_paise = $2, delivery_fee_paise = $3,
+            payment_status = $4
+      WHERE id = $5`,
+    [amountPaise, platformFeePaise, deliveryFeePaise, PAYMENT_STATUS.AWAITING, requestId]
   );
   await recordAudit({
     action: "payment.intent_created",
@@ -399,6 +414,160 @@ export async function settlePaymentForRequest(
   return settled;
 }
 
+/**
+ * Pays the delivery fee out to the rider who completed the delivery.
+ *
+ * Called at handover, not at capture: the customer pays before a rider has been
+ * assigned, so there is no account to send the money to at that moment. What
+ * happens in between is stated plainly rather than hidden — the fee sits in the
+ * platform balance between capture and handover. It is owed to the rider the
+ * whole time and is never MediMesh revenue, but claiming it reached the rider
+ * before this call would be false.
+ *
+ * Idempotent, for the same reason the pharmacy payout is: handover can be
+ * attempted twice, and the second attempt must not pay twice.
+ */
+export async function settleRiderPayout(
+  deliveryId: number,
+  actor: { userId: number; role: string }
+): Promise<{ paidPaise: number; transferId: string } | null> {
+  const delivery = await queryOne<{
+    id: number;
+    request_id: number;
+    partner_id: number | null;
+  }>("SELECT id, request_id, partner_id FROM deliveries WHERE id = $1", [deliveryId]);
+  if (!delivery) return null;
+  if (!delivery.partner_id) return null;
+
+  const payment = await getPaymentForRequest(delivery.request_id);
+  if (!payment) return null;
+  if (payment.rider_amount_paise <= 0) return null;
+  // Only a captured payment has money in it to transfer.
+  if (payment.status !== PAYMENT_STATUS.CAPTURED && payment.status !== PAYMENT_STATUS.PAID_OUT) {
+    return null;
+  }
+  if (payment.rider_paid_out_at) return null;
+
+  const rider = await queryOne<{
+    id: number;
+    razorpay_account_id: string | null;
+    payout_account_status: string | null;
+  }>(
+    "SELECT id, razorpay_account_id, payout_account_status FROM users WHERE id = $1",
+    [delivery.partner_id]
+  );
+  if (!rider?.razorpay_account_id || rider.payout_account_status !== "activated") {
+    // Recorded rather than thrown: the delivery is complete and must not fail
+    // over a payout configuration problem. Admin can see it is owed.
+    await recordAudit({
+      actorUserId: actor.userId,
+      actorRole: actor.role,
+      action: "payment.rider_payout_blocked",
+      entityType: "payment",
+      entityId: payment.id,
+      meta: { riderId: delivery.partner_id, amountPaise: payment.rider_amount_paise },
+    });
+    return null;
+  }
+
+  const now = nowIso();
+  // Claim the payout first with a guarded UPDATE. Two concurrent handovers both
+  // reaching this point must produce one transfer, not two.
+  const claimed = await queryReturning<PaymentRow>(
+    `UPDATE payments SET rider_user_id = $1, rider_account_id = $2
+      WHERE id = $3 AND rider_paid_out_at IS NULL
+      RETURNING *`,
+    [delivery.partner_id, rider.razorpay_account_id, payment.id]
+  );
+  if (!claimed) return null;
+
+  const gateway = getPaymentGateway();
+  const reference = `rider_${payment.id}_${deliveryId}`;
+  let transferId: string;
+  try {
+    const result = await gateway.transfer({
+      paymentId: payment.razorpay_payment_id ?? `pay_${payment.id}`,
+      accountId: rider.razorpay_account_id,
+      amountPaise: payment.rider_amount_paise,
+      reference,
+      notes: { request_id: String(delivery.request_id) },
+    });
+    transferId = result.transferId;
+  } catch (e) {
+    // Release the claim so a retry is possible; a stuck claim would silently
+    // keep a rider's money.
+    await queryRun(
+      "UPDATE payments SET rider_user_id = NULL, rider_account_id = NULL WHERE id = $1 AND rider_paid_out_at IS NULL",
+      [payment.id]
+    );
+    throw e;
+  }
+
+  await queryRun(
+    `UPDATE payments SET rider_transfer_id = $1, rider_paid_out_at = $2, updated_at = $2
+      WHERE id = $3 AND rider_paid_out_at IS NULL`,
+    [transferId, now, payment.id]
+  );
+  await recordAudit({
+    actorUserId: actor.userId,
+    actorRole: actor.role,
+    action: "payment.rider_paid_out",
+    entityType: "payment",
+    entityId: payment.id,
+    meta: {
+      requestId: delivery.request_id,
+      riderId: delivery.partner_id,
+      amountPaise: payment.rider_amount_paise,
+    },
+  });
+  publish(channels.rider(delivery.partner_id), {
+    type: "payment",
+    requestId: delivery.request_id,
+    paymentId: payment.id,
+    status: "RiderPaidOut",
+  });
+
+  try {
+    await recordRiderSettlementOnChain(payment.id, delivery.partner_id, {
+      userId: actor.userId,
+      role: actor.role,
+    });
+  } catch (e) {
+    // Best-effort audit anchor, same as the pharmacy side.
+    // eslint-disable-next-line no-console
+    console.error("rider settlement anchor failed", e);
+  }
+
+  return { paidPaise: payment.rider_amount_paise, transferId };
+}
+
+/** A rider's earnings: what they have been paid and what is still owed. */
+export async function riderEarnings(riderUserId: number): Promise<{
+  paidPaise: number;
+  owedPaise: number;
+  deliveries: number;
+  currency: string;
+}> {
+  const row = await queryOne<{
+    paid: string | null;
+    owed: string | null;
+    deliveries: number;
+  }>(
+    `SELECT COALESCE(SUM(rider_amount_paise) FILTER (WHERE rider_paid_out_at IS NOT NULL), 0)::text AS paid,
+            COALESCE(SUM(rider_amount_paise) FILTER (WHERE rider_paid_out_at IS NULL
+                                                    AND status IN ('Captured','PaidOut')), 0)::text AS owed,
+            COUNT(*)::int AS deliveries
+       FROM payments WHERE rider_user_id = $1`,
+    [riderUserId]
+  );
+  return {
+    paidPaise: Number(row?.paid ?? 0),
+    owedPaise: Number(row?.owed ?? 0),
+    deliveries: row?.deliveries ?? 0,
+    currency: "INR",
+  };
+}
+
 /** Refunds a captured payment. No-op when nothing was captured. */
 export async function refundPaymentForRequest(
   requestId: number,
@@ -502,7 +671,25 @@ export async function getPaymentForRequest(requestId: number): Promise<PaymentRo
 }
 
 export async function getPaymentAudit(paymentId: number): Promise<PaymentAuditRow | null> {
-  return (await queryOne<PaymentAuditRow>("SELECT * FROM payment_audit WHERE payment_id = $1", [paymentId])) ?? null;
+  // Pinned to the pharmacy anchor: a payment can have two rows (the pharmacy's
+  // share and the rider's fee) and an unqualified SELECT here would return
+  // whichever the planner felt like, which is not something to depend on.
+  return (
+    (await queryOne<PaymentAuditRow>(
+      "SELECT * FROM payment_audit WHERE payment_id = $1 AND kind = 'pharmacy' ORDER BY id LIMIT 1",
+      [paymentId]
+    )) ?? null
+  );
+}
+
+/** The rider's anchor for a payment, if it has one. */
+export async function getRiderPaymentAudit(paymentId: number): Promise<PaymentAuditRow | null> {
+  return (
+    (await queryOne<PaymentAuditRow>(
+      "SELECT * FROM payment_audit WHERE payment_id = $1 AND kind = 'rider' ORDER BY id LIMIT 1",
+      [paymentId]
+    )) ?? null
+  );
 }
 
 /** Payout history for one pharmacy owner, newest first, with totals. */
@@ -542,6 +729,7 @@ export async function paymentView(requestId: number) {
   const payment = await getPaymentForRequest(requestId);
   if (!payment) return null;
   const audit = await getPaymentAudit(payment.id);
+  const riderAudit = await getRiderPaymentAudit(payment.id);
   const payoutAccountReady = await payoutAccountReadyFor(payment.pharmacy_id);
 
   return {
@@ -551,6 +739,8 @@ export async function paymentView(requestId: number) {
     amountPaise: payment.amount_paise,
     platformFeePaise: payment.platform_fee_paise,
     pharmacyAmountPaise: payment.pharmacy_amount_paise,
+    deliveryFeePaise: payment.rider_amount_paise,
+    riderPaidOut: Boolean(payment.rider_paid_out_at),
     amountLabel: rupees(payment.amount_paise),
     currency: payment.currency,
     gateway: payment.gateway,
@@ -572,6 +762,15 @@ export async function paymentView(requestId: number) {
           txHash: audit.tx_hash,
           blockNumber: audit.block_number,
           error: audit.error,
+        }
+      : null,
+    riderSettlement: riderAudit
+      ? {
+          settlementRef: riderAudit.settlement_ref,
+          status: riderAudit.status,
+          txHash: riderAudit.tx_hash,
+          blockNumber: riderAudit.block_number,
+          error: riderAudit.error,
         }
       : null,
   };

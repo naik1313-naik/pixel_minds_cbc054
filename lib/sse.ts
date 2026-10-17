@@ -72,6 +72,7 @@ export const channels = {
   request: (id: number) => `request:${id}`,
   delivery: (id: number) => `delivery:${id}`,
   pharmacy: (id: number) => `pharmacy:${id}`,
+  rider: (id: number) => `rider:${id}`,
   admin: "admin",
   blockchain: "blockchain",
 };

@@ -21,6 +21,9 @@ export interface PaymentView {
   amountPaise: number;
   platformFeePaise: number;
   pharmacyAmountPaise: number;
+  /** Delivery fee charged on top of the medicine price; paid to the rider. */
+  deliveryFeePaise?: number;
+  riderPaidOut?: boolean;
   amountLabel: string;
   gateway: string;
   razorpayOrderId: string | null;
@@ -143,7 +146,7 @@ export default function PaymentPanel({ requestId, requestStatus, onPaid }: Props
             <CreditCard className="h-4 w-4" /> Payment
           </h2>
           <p className="text-sm text-slate-500">
-            {payment.amountLabel} for this order · paid to the pharmacy, not to MediMesh
+            {payment.amountLabel} for this order · paid to the pharmacy and the rider, not to MediMesh
           </p>
         </div>
         <StatusBadge status={payment.status} />
@@ -188,7 +191,24 @@ export default function PaymentPanel({ requestId, requestStatus, onPaid }: Props
                 {formatRupees(payment.pharmacyAmountPaise)}
               </dd>
             </div>
+            {payment.deliveryFeePaise ? (
+              <div>
+                <dt className="text-slate-500">Delivery fee to the rider</dt>
+                <dd className="font-medium text-slate-900">
+                  {formatRupees(payment.deliveryFeePaise)}
+                  {payment.riderPaidOut ? (
+                    <span className="ml-1 text-xs text-emerald-700">paid out</span>
+                  ) : null}
+                </dd>
+              </div>
+            ) : null}
           </dl>
+          {payment.deliveryFeePaise ? (
+            <p className="text-xs text-slate-500">
+              The delivery fee is not part of the pharmacy&apos;s share. It goes to the rider who
+              delivers your order, and it reaches their account when the handover is verified.
+            </p>
+          ) : null}
           <SettlementReceipt payment={payment} />
         </div>
       )}

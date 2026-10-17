@@ -21,6 +21,7 @@ import type { ethers } from "ethers";
 import {
   BlockchainUnavailableError,
   TransactionFailedError,
+  deliveryWallet,
   describeError,
   getContract,
   getSignerFor,
@@ -31,8 +32,10 @@ import { getOrderRefForRequest } from "./ledger";
 import {
   generateOpaqueRef,
   hashRef,
+  hashRiderSettlementMetadata,
   hashSettlementMetadata,
   METADATA_SCHEMA_VERSION,
+  type RiderSettlementMetadata,
   type SettlementMetadata,
 } from "./hashes";
 import {
@@ -162,6 +165,178 @@ export async function recordSettlementOnChain(
       contract as unknown as ethers.Contract,
       "recordSettlement",
       [settlementRefHash, orderRefHash, metadataHash, payment.pharmacy_amount_paise, wallet],
+      {
+        from: wallet,
+        onSubmitted: async (txHash) => {
+          await markSubmitted(op.id, txHash);
+          await queryRun(
+            "UPDATE payment_audit SET tx_operation_id = $1, status = 'Submitted' WHERE id = $2",
+            [op.id, auditRow.id]
+          );
+        },
+      }
+    );
+
+    await markConfirmed(op.id, { txHash: result.txHash, blockNumber: result.blockNumber });
+    return (
+      (await queryOne<PaymentAuditRow>(
+        `UPDATE payment_audit
+            SET status = 'Settled', tx_hash = $1, block_number = $2, error = NULL, settled_at = $3,
+                updated_at = $3
+          WHERE id = $4 RETURNING *`,
+        [result.txHash, result.blockNumber, nowIso(), auditRow.id]
+      ))!
+    );
+  } catch (e) {
+    const message = describeError(e);
+    const txHash = e instanceof TransactionFailedError ? e.txHash : null;
+    await markFailed(op.id, message, { txHash, uncertain: txHash != null });
+    await queryRun(
+      `UPDATE payment_audit
+          SET status = $1, error = $2, updated_at = $3
+        WHERE id = $4`,
+      [txHash != null ? "NeedsReconciliation" : "Failed", message.slice(0, 1000), nowIso(), auditRow.id]
+    );
+    throw new Error(message);
+  }
+}
+
+/**
+ * The wallet a rider signs and receives on.
+ *
+ * Read from the user row, not inferred from the deployment manifest: the
+ * manifest is keyed by Hardhat account slot and knows nothing about the ids the
+ * database assigned, so every lookup there failed for perfectly real riders. The
+ * manifest is still consulted as a fallback for a deployment whose users were
+ * never mapped.
+ */
+async function riderChainWallet(riderUserId: number): Promise<string | null> {
+  const row = await queryOne<{ chain_wallet: string | null }>(
+    "SELECT chain_wallet FROM users WHERE id = $1",
+    [riderUserId]
+  );
+  return row?.chain_wallet ?? deliveryWallet(riderUserId);
+}
+
+/**
+ * Anchors the rider's delivery-fee settlement.
+ *
+ * A separate anchor from the pharmacy's, with its own reference and its own
+ * replay guard: the fee is a different payment to a different party, so a
+ * dispute or correction about one must not invalidate the other's proof.
+ *
+ * The beneficiary must hold DELIVERY_ROLE on-chain, so only an authorized rider
+ * wallet can be named as the recipient.
+ */
+export async function recordRiderSettlementOnChain(
+  paymentId: number,
+  riderUserId: number,
+  actor: { userId: number; role: string }
+): Promise<PaymentAuditRow> {
+  const payment = await queryOne<PaymentRow>("SELECT * FROM payments WHERE id = $1", [paymentId]);
+  if (!payment) throw new Error("Payment not found");
+  if (payment.rider_amount_paise <= 0) throw new Error("Payment has no rider share");
+
+  const existing = await queryOne<PaymentAuditRow>(
+    "SELECT * FROM payment_audit WHERE payment_id = $1 AND kind = 'rider'",
+    [paymentId]
+  );
+  if (existing?.status === "Settled") return existing;
+
+  const settledAt = payment.rider_paid_out_at ?? nowIso();
+  const orderRef = await getOrderRefForRequest(payment.request_id);
+  const settlementRef = existing?.settlement_ref ?? generateOpaqueRef("RDR");
+  const settlementRefHash = hashRef(settlementRef);
+  const orderRefHash = hashRef(orderRef);
+  const gatewayRef = payment.rider_transfer_id ?? "unrouted";
+
+  const metadata: RiderSettlementMetadata = {
+    schema: METADATA_SCHEMA_VERSION,
+    settlementRef,
+    orderRef,
+    riderUserId,
+    amountPaise: payment.rider_amount_paise,
+    requestId: payment.request_id,
+    gatewayRef,
+    settledAt,
+  };
+  const metadataJson = JSON.stringify(metadata);
+  const metadataHash = hashRiderSettlementMetadata(metadata);
+
+  let auditRow = existing;
+  if (auditRow) {
+    auditRow = (
+      await queryOne<PaymentAuditRow>(
+        `UPDATE payment_audit
+            SET status = 'Pending', error = NULL, metadata_hash = $1, gateway_ref_hash = $2,
+                metadata_json = $3, rider_user_id = $4, actor_user_id = $5, actor_role = $6,
+                updated_at = $7
+          WHERE id = $8 RETURNING *`,
+        [
+          metadataHash,
+          hashRef(gatewayRef),
+          metadataJson,
+          riderUserId,
+          actor.userId,
+          actor.role,
+          nowIso(),
+          auditRow.id,
+        ]
+      )
+    )!;
+  } else {
+    auditRow = (
+      await queryOne<PaymentAuditRow>(
+        `INSERT INTO payment_audit
+           (payment_id, kind, rider_user_id, settlement_ref, settlement_ref_hash, order_ref,
+            order_ref_hash, amount_paise, beneficiary_wallet, actor_user_id, actor_role,
+            gateway_ref_hash, metadata_hash, metadata_json, status, created_at, updated_at)
+         VALUES ($1, 'rider', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'Pending', $14, $14)
+         RETURNING *`,
+        [
+          paymentId,
+          riderUserId,
+          settlementRef,
+          settlementRefHash,
+          orderRef,
+          orderRefHash,
+          payment.rider_amount_paise,
+          deliveryWallet(riderUserId),
+          actor.userId,
+          actor.role,
+          hashRef(gatewayRef),
+          metadataHash,
+          metadataJson,
+          nowIso(),
+        ]
+      )
+    )!;
+  }
+
+  const wallet = await riderChainWallet(riderUserId);
+  if (!wallet) {
+    const message =
+      `No blockchain wallet is mapped for rider ${riderUserId}. ` +
+      `Run: npm run chain:map-wallets`;
+    await queryRun("UPDATE payment_audit SET status = 'Failed', error = $1 WHERE id = $2", [
+      message,
+      auditRow.id,
+    ]);
+    throw new Error(message);
+  }
+
+  const op = await createOperation({
+    type: OPERATION_TYPE.PAYMENT_SETTLE,
+    entityType: "rider_payout",
+    entityId: paymentId,
+  });
+
+  try {
+    const contract = getContract(getSignerFor(wallet));
+    const result = await sendTx(
+      contract as unknown as ethers.Contract,
+      "recordRiderSettlement",
+      [settlementRefHash, orderRefHash, metadataHash, payment.rider_amount_paise, wallet],
       {
         from: wallet,
         onSubmitted: async (txHash) => {

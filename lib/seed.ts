@@ -210,8 +210,8 @@ export async function seedDatabase(): Promise<void> {
     const inserted = await queryReturning<{ id: number }>(
       `INSERT INTO users (email, name, phone, password_hash, role, pharmacy_id, totp_secret_enc, totp_enabled,
          vehicle_number, id_type, id_last4, id_number_enc, doc_status, doc_checked_at, doc_meta_json,
-         partner_online, partner_status, rating, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+         partner_online, partner_status, rating, razorpay_account_id, payout_account_status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
        RETURNING id`,
       [
         u.email,
@@ -232,6 +232,11 @@ export async function seedDatabase(): Promise<void> {
         u.online ?? 0,
         u.partnerStatus ?? null,
         u.rating ?? 4.8,
+        // Riders get a linked payout account exactly as pharmacy owners do —
+        // without one their delivery fee could never be paid out, and the
+        // earnings screen would have nothing truthful to show.
+        u.role === "delivery_partner" ? `acc_demo_rider_${u.email}` : null,
+        u.role === "delivery_partner" ? "activated" : null,
         now,
       ]
     );

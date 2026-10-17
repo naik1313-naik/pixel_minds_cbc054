@@ -53,6 +53,39 @@ export interface RefundResult {
   status: string;
 }
 
+/**
+ * A standalone transfer to a linked account.
+ *
+ * The pharmacy's share is created at capture, as a transfer on the payment
+ * itself. The rider's fee cannot be: the customer pays before a rider has been
+ * assigned, so there is no account to transfer to yet. It is therefore paid out
+ * after the handover, from the platform balance, straight to the rider's own
+ * linked account.
+ *
+ * The honest consequence, stated rather than hidden: between capture and
+ * handover the delivery fee rests in the platform balance. It never becomes
+ * MediMesh revenue — it is owed to the rider the whole time — but it is not in
+ * the rider's bank account at the moment of capture either. No surface should
+ * claim otherwise.
+ */
+export interface TransferInput {
+  /** The captured payment the funds are drawn against. */
+  paymentId: string;
+  accountId: string;
+  amountPaise: number;
+  currency?: string;
+  onBehalfOf?: string;
+  /** Opaque, for the gateway's own records. */
+  reference: string;
+  notes?: Record<string, string>;
+}
+
+export interface TransferResult {
+  transferId: string;
+  amountPaise: number;
+  status: string;
+}
+
 export class GatewayError extends Error {
   status: number;
   constructor(message: string, status = 502) {
@@ -199,6 +232,8 @@ export interface PaymentGateway {
   readonly name: "razorpay" | "demo";
   createOrder(input: GatewayOrderInput): Promise<GatewayOrder>;
   capture(input: CaptureInput): Promise<CaptureResult>;
+  /** Pays a settled share out to a rider, after the handover. */
+  transfer(input: TransferInput): Promise<TransferResult>;
   refund(paymentId: string, amountPaise: number): Promise<RefundResult>;
   /** Resolves a client-reported payment id against the gateway (best effort). */
   verifyPayment?(paymentId: string): Promise<boolean>;
@@ -212,7 +247,7 @@ export interface PaymentGateway {
    * means a new gateway cannot accidentally ship with no verification at all.
    */
   verifyCheckout(input: { orderId: string; paymentId: string; signature: string }): boolean;
-  /** Hosted onboarding for a pharmacy owner's own payout account. */
+  /** Hosted onboarding for a pharmacy owner's or rider's own payout account. */
   createLinkedAccount(input: { email: string; phone?: string | null }): Promise<LinkedAccount>;
   fetchLinkedAccount(accountId: string): Promise<LinkedAccount["status"]>;
 }
@@ -279,6 +314,25 @@ const razorpayGateway: PaymentGateway = {
     };
   },
 
+  async transfer(input: TransferInput) {
+    const body = await call<{ id: string; amount: number; status?: string }>("/transfers", {
+      method: "POST",
+      body: {
+        account: input.accountId,
+        amount: input.amountPaise,
+        currency: input.currency ?? "INR",
+        on_behalf_of: input.onBehalfOf,
+        reference_id: input.reference,
+        notes: input.notes ?? {},
+      },
+    });
+    return {
+      transferId: body.id,
+      amountPaise: body.amount,
+      status: body.status ?? "processed",
+    };
+  },
+
   async refund(paymentId, amountPaise) {
     const body = await call<{ id: string; amount: number; status?: string }>(
       `/payments/${encodeURIComponent(paymentId)}/refund`,
@@ -331,6 +385,14 @@ const demoGateway: PaymentGateway = {
       paymentId: input.paymentId,
       transferId: `trf_demo_${input.paymentId}`,
       status: "captured",
+    };
+  },
+
+  async transfer(input: TransferInput) {
+    return {
+      transferId: `trf_demo_rider_${input.paymentId}`,
+      amountPaise: input.amountPaise,
+      status: "processed",
     };
   },
 

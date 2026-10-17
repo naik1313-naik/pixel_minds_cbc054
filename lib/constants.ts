@@ -10,6 +10,16 @@ export {
 export const WHOLESALE_RATE = 0.85;
 export const PLATFORM_FEE_RATE = 0.05;
 
+/**
+ * What the customer pays to have the medicine delivered.
+ *
+ * Charged on top of the medicine price and paid to the rider, not the pharmacy.
+ * The platform fee is computed on the medicine amount only, so taking 5% of a
+ * delivery fee would be money taken out of the rider's pay for no service
+ * rendered.
+ */
+export const DELIVERY_FEE_PAISE = 2500;
+
 // Serviceable delivery radius from the fulfilling pharmacy.
 export const DELIVERY_RADIUS_KM = 8;
 export const GEOFENCE_METERS = 150;

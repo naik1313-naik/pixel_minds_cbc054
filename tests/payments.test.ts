@@ -64,8 +64,11 @@ async function activatePayout(pharmacyId: number, accountId = "acc_test_owner") 
 // A gateway stub that records what it was asked to do, so routing can be
 // asserted without touching a real merchant account.
 function stubGateway() {
-  const calls: { captures: { paymentId: string; account: string | null; amount: number }[]; refunds: string[] } =
-    { captures: [], refunds: [] };
+  const calls: {
+    captures: { paymentId: string; account: string | null; amount: number }[];
+    transfers: { paymentId: string; account: string; amount: number }[];
+    refunds: string[];
+  } = { captures: [], transfers: [], refunds: [] };
   const gw: PaymentGateway = {
     name: "demo",
     async createOrder(input) {
@@ -78,6 +81,14 @@ function stubGateway() {
         amount: input.beneficiaryAmountPaise ?? 0,
       });
       return { paymentId: input.paymentId, transferId: "trf_demo_1", status: "captured" };
+    },
+    async transfer(input) {
+      calls.transfers.push({
+        paymentId: input.paymentId,
+        account: input.accountId,
+        amount: input.amountPaise,
+      });
+      return { transferId: "trf_demo_rider_1", amountPaise: input.amountPaise, status: "processed" };
     },
     async refund(paymentId) {
       calls.refunds.push(paymentId);

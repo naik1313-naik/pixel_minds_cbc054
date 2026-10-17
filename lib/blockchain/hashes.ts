@@ -76,6 +76,23 @@ export interface SettlementMetadata {
 }
 
 /**
+ * Canonical metadata for a rider's delivery-fee settlement.
+ *
+ * Carries the rider's user id and the internal request id so a verifier can
+ * cross-check the amount without either of them being a gateway identifier.
+ */
+export interface RiderSettlementMetadata {
+  schema: number;
+  settlementRef: string;
+  orderRef: string;
+  riderUserId: number;
+  amountPaise: number;
+  requestId: number;
+  gatewayRef: string; // opaque transfer reference
+  settledAt: string;
+}
+
+/**
  * Hash a string to bytes32 so it can be ABI-packed.
  *
  * solidityPackedKeccak256 only accepts fixed-width Solidity types — "string" is
@@ -148,6 +165,31 @@ export function hashSettlementMetadata(meta: SettlementMetadata): string {
       h(meta.orderRef),
       meta.pharmacyId,
       meta.amountPaise,
+      h(meta.gatewayRef),
+      h(meta.settledAt),
+    ]
+  );
+}
+
+/**
+ * Hash for a rider's delivery-fee settlement.
+ *
+ * Deliberately a different domain separator and a different field list from the
+ * pharmacy hash. If the two shared one encoding, a rider's amount could in
+ * principle be replayed as a pharmacy's — and worse, a verifier recomputing a
+ * receipt would have no way to tell which party a hash described.
+ */
+export function hashRiderSettlementMetadata(meta: RiderSettlementMetadata): string {
+  return solidityPackedKeccak256(
+    ["bytes32", "uint8", "bytes32", "bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32"],
+    [
+      h("MediMeshRiderSettlementMetadata"),
+      meta.schema,
+      h(meta.settlementRef),
+      h(meta.orderRef),
+      meta.riderUserId,
+      meta.amountPaise,
+      meta.requestId,
       h(meta.gatewayRef),
       h(meta.settledAt),
     ]

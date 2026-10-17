@@ -420,6 +420,11 @@ CREATE TABLE IF NOT EXISTS disputes (
 
 CREATE TABLE IF NOT EXISTS payment_audit (
   id SERIAL PRIMARY KEY,
+  -- 'pharmacy' = the medicine share routed to a pharmacy owner;
+  -- 'rider'     = the delivery fee routed to the rider who completed the job.
+  -- One settled anchor per (payment, kind): the two parties are paid separately
+  -- and must be provable independently, so neither can invalidate the other.
+  kind TEXT NOT NULL DEFAULT 'pharmacy',
   payment_id INTEGER NOT NULL REFERENCES payments(id),
   settlement_ref TEXT NOT NULL UNIQUE,       -- opaque
   settlement_ref_hash TEXT NOT NULL UNIQUE,  -- keccak256(settlement_ref), on-chain key
@@ -462,13 +467,43 @@ CREATE INDEX IF NOT EXISTS idx_bc_ops_entity ON blockchain_operations (entity_ty
 CREATE INDEX IF NOT EXISTS idx_payments_pharmacy ON payments (pharmacy_id);
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments (status);
 CREATE INDEX IF NOT EXISTS idx_payment_audit_payment ON payment_audit (payment_id);
+-- Rider earnings.
+--
+-- The delivery fee is charged to the customer and belongs to the rider who
+-- completes the delivery. It is not taken out of the pharmacy's share, because
+-- the pharmacy does not do the delivery.
+ALTER TABLE requests ADD COLUMN IF NOT EXISTS delivery_fee_paise INTEGER NOT NULL DEFAULT 0;
+
+-- Riders get their own linked payout account, exactly as pharmacy owners do.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS razorpay_account_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS payout_account_status TEXT;
+-- This user's on-chain wallet address, when they have one.
+--
+-- Stored rather than inferred. The deployment manifest maps wallets to the
+-- Hardhat accounts that were authorized at deploy time, but it has no idea what
+-- user ids the database ended up assigning — so resolving a rider's chain
+-- identity from the manifest alone returned "no wallet mapped" for perfectly
+-- real riders. The mapping lives with the user instead.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS chain_wallet TEXT;
+ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS wallet_address TEXT;
+
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS rider_user_id INTEGER REFERENCES users(id);
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS rider_amount_paise INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS rider_account_id TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS rider_transfer_id TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS rider_paid_out_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_payments_rider ON payments (rider_user_id);
+
 -- Dispute indexes.
 CREATE INDEX IF NOT EXISTS idx_disputes_request ON disputes (request_id);
 CREATE INDEX IF NOT EXISTS idx_disputes_status ON disputes (status);
 CREATE INDEX IF NOT EXISTS idx_disputes_payment ON disputes (payment_id);
 
+ALTER TABLE payment_audit ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'pharmacy';
+ALTER TABLE payment_audit ADD COLUMN IF NOT EXISTS rider_user_id INTEGER REFERENCES users(id);
+DROP INDEX IF EXISTS idx_payment_audit_settled;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_audit_settled
-  ON payment_audit (payment_id) WHERE status = 'Settled';
+  ON payment_audit (payment_id, kind) WHERE status = 'Settled';
 
 CREATE INDEX IF NOT EXISTS idx_inventory_med ON inventory (medicine_id);
 CREATE INDEX IF NOT EXISTS idx_requests_customer ON requests (customer_id);

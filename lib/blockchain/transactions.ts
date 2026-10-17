@@ -90,7 +90,7 @@ export function isPermanentFailure(message: string): boolean {
 
 export async function createOperation(input: {
   type: OperationType;
-  entityType: "batch" | "transfer" | "delivery" | "payment";
+  entityType: "batch" | "transfer" | "delivery" | "payment" | "rider_payout";
   entityId: number;
   idempotencyKey?: string;
 }): Promise<OperationRow> {
