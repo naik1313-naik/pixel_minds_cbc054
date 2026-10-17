@@ -1,0 +1,8 @@
+generic_name,brand_name,ingredients,strength_value,strength_unit,dosage_form,route,category,subcategory,therapeutic_class,requires_prescription,rx_basis,regulatory_status,verification_status,source,source_ref,package_size,barcode,aliases,price_paise,is_active
+Cefixime,,Cefixime,200,mg,Tablet,Oral,Antibiotics and antimicrobials,Cephalosporin,Third-generation cephalosporin,yes,curated,prescription,unverified,demo-sample,DEMO-CSV-001,10 tablets,,cefixime|cefix,34000,true
+Metformin,Glucophage,Metformin HCl,850,mg,Tablet,Oral,Diabetes medicines,Biguanide,Biguanide,yes,regulatory,prescription,unverified,demo-sample,DEMO-CSV-002,14 tablets,,metformin|glucophage,78000,true
+Pantoprazole,,Pantoprazole Sodium,40,mg,Tablet,Oral,Gastrointestinal and acidity,Proton pump inhibitor,PPI,no,curated,otc,unverified,demo-sample,DEMO-CSV-003,10 tablets,,pantoprazole,6500,true
+Amoxicillin 500,"Fictional Demo Brand",Amoxicillin,500,mg,Capsule,Oral,Antibiotics and antimicrobials,Penicillin,Beta-lactam antibiotic,yes,curated,prescription,demo,demo-sample,DEMO-CSV-004,10 capsules,,amoxycillin,7200,true
+"Compound with, a comma",Demo Brand,"Ingredient A, Ingredient B",,,Syrup,Oral,Oral liquids and syrups,Antitussive,Antitussive,no,unverified,otc,demo,demo-sample,DEMO-CSV-005,100 ml,,compound syrup,8900,true
+Broken Row Without Form,,,,,,,,,,,,,,,,,,
+Another Good Row,Ibuprofen,Ibuprofen,400,mg,Tablet,Oral,Pain relief and fever,NSAID,NSAID,no,curated,otc,unverified,demo-sample,DEMO-CSV-006,10 tablets,,brufen|ibuprofen,3100,true

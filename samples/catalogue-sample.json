@@ -1,0 +1,52 @@
+{
+  "_comment": "DEMONSTRATION DATA. Every product here is invented for the sample and must not be treated as real catalogue data. The import pipeline is the point of this file; the medicines are not.",
+  "source": "demo-sample",
+  "records": [
+    {
+      "generic_name": "Prednisolone",
+      "brand_name": null,
+      "ingredients": "Prednisolone",
+      "strength_value": 10,
+      "strength_unit": "mg",
+      "dosage_form": "Tablet",
+      "route": "Oral",
+      "category": "Mental health medicines",
+      "subcategory": "Corticosteroid",
+      "requires_prescription": true,
+      "rx_basis": "curated",
+      "regulatory_status": "prescription",
+      "verification_status": "unverified",
+      "package_size": "10 tablets",
+      "aliases": "prednisolone, predisone",
+      "price_paise": 4200
+    },
+    {
+      "generic_name": "Pantoprazole",
+      "brand_name": null,
+      "strength_value": "20mg",
+      "dosage_form": "Tablet",
+      "route": "Oral",
+      "category": "Gastrointestinal and acidity",
+      "subcategory": "Proton pump inhibitor",
+      "requires_prescription": false,
+      "verification_status": "unverified",
+      "package_size": "10 tablets",
+      "price_paise": 5200
+    },
+    {
+      "generic_name": "Demo Row With A Bad Number",
+      "strength_value": "not-a-number",
+      "strength_unit": "mg",
+      "dosage_form": "Tablet",
+      "route": "Oral",
+      "category": "Pain relief and fever",
+      "price_paise": 1000
+    },
+    {
+      "generic_name": "",
+      "dosage_form": "Tablet",
+      "category": "Pain relief and fever",
+      "price_paise": 500
+    }
+  ]
+}

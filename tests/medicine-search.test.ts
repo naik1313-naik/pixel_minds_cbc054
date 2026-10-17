@@ -237,8 +237,8 @@ describe("the natural-language parser", () => {
   });
 
   it("maps a symptom phrase to a category", () => {
-    expect(parseQuery("something for my allergy").category).toBe("Antihistamine");
-    expect(parseQuery("medicine for acidity").category).toBe("Antacid");
+    expect(parseQuery("something for my allergy").category).toBe("Allergy and antihistamines");
+    expect(parseQuery("medicine for acidity").category).toBe("Antacids and oral rehydration");
   });
 
   it("pulls out strength and form", () => {

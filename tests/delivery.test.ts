@@ -25,7 +25,26 @@ async function partnerByRatingRank(rank: number) {
   )[rank];
 }
 
-async function setupDelivery(medicineId = 1, qty = 2) {
+/**
+ * Resolves the catalogue entry to use, by name.
+ *
+ * Ids shifted when the catalogue grew, and a default of `1` now points at a
+ * product the demo does not stock — which failed as "cannot read id of
+ * undefined" several layers away from the cause.
+ */
+async function stockedMedicine(): Promise<number> {
+  const row = await queryOne<{ id: number }>(
+    `SELECT m.id FROM medicines m
+       JOIN inventory i ON i.medicine_id = m.id
+      GROUP BY m.id
+     HAVING SUM(i.qty_total) > 20
+      ORDER BY m.id LIMIT 1`
+  );
+  return row!.id;
+}
+
+async function setupDelivery(medicineId?: number, qty = 2) {
+  medicineId = medicineId ?? (await stockedMedicine());
   const { requestId } = await createRequest({
     medicineId,
     qty,
@@ -293,7 +312,12 @@ describe("delivery lifecycle + handover", () => {
   });
 
   it("requires recipient ID check for prescription deliveries", async () => {
-    const { deliveryId, pharmacyId } = await setupDelivery(9, 1); // Amoxicillin, rx
+    const rx = (
+      await queryOne<{ id: number }>(
+        "SELECT id FROM medicines WHERE requires_prescription = 1 AND id IN (SELECT medicine_id FROM inventory) ORDER BY id LIMIT 1"
+      )
+    )!.id;
+    const { deliveryId, pharmacyId } = await setupDelivery(rx, 1);
     const rider = await partnerByRatingRank(0);
     expect((await getDelivery(deliveryId))!.rx_required).toBe(1);
     await assignRider(deliveryId, pharmacyId, rider.id);
