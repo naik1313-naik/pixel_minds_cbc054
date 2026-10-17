@@ -12,6 +12,41 @@ import {
   normalizeDocument,
   verhoeffCheckDigit,
 } from "./identity";
+import { CATALOGUE as MEDICINES, type CatalogueEntry } from "./catalogue-data";
+
+
+/** "500mg", or empty when the entry has no strength. */
+function strengthLabel(m: CatalogueEntry): string {
+  if (m.strengthValue === null || m.strengthValue === undefined) return "";
+  return `${m.strengthValue}${m.strengthUnit ?? ""}`;
+}
+
+/**
+ * A pharmacy's selling price for a catalogue entry.
+ *
+ * A per-pharmacy variation off the catalogue price, so the demo shows that
+ * prices differ between shops. Every one of these figures is fictional.
+ */
+const pharmacyPriceOffsets = new Map<number, number>([
+  [1, 0], [2, 1.04], [3, 0.97], [4, 1.08], [5, 1.02], [6, 0.99], [7, 1.06], [8, 0.95],
+]);
+let priceLookup = new Map<number, number>();
+
+/** The list price of a catalogue entry, in paise. */
+function cataloguePriceOf(medicineId: number): number {
+  return priceLookup.get(medicineId) ?? 0;
+}
+
+/**
+ * What pharmacy `pid` charges for a catalogue entry.
+ *
+ * Each shop prices differently; the offset is a fixed per-pharmacy multiplier on
+ * the fictional list price. This is not a market price and does not claim to be.
+ */
+function pharmacyPriceFor(pid: number, medicineId: number): number {
+  const offset = pharmacyPriceOffsets.get(pid) ?? 1;
+  return Math.round(cataloguePriceOf(medicineId) * offset);
+}
 
 // Cleary-fictional demo data. No real patients, pharmacies, licences or people.
 
@@ -26,91 +61,119 @@ const PHARMACIES = [
   { id: 8, name: "City Drug House (Demo)", address: "ITPL Main Road, Whitefield", lat: 12.9698, lng: 77.75, lic: "KA-BLR-20B-0008", status: "verified", score: 0.8, fulfil: 40 },
 ];
 
-// 24 medicines, 3 rx_required. Prices in paise.
-//
-// These are realistic INR figures for what is actually sold — a strip of
-// tablets, not a single tablet. The old catalogue priced one tablet at three
-// rupees, which made every platform fee and every settlement a rounding error
-// and made the payment screens impossible to read as real money.
-const MEDICINES = [
-  { id: 1, name: "Paracetamol 500mg", salt: "Acetaminophen", paise: 2500, rx: 0,
-     synonyms: "Paracetamol, Tylenol, Calpol, Dolo 650", category: "Analgesic", strength: "500mg", dosageForm: "Tablet" },
-  { id: 2, name: "Dolo 650", salt: "Acetaminophen", paise: 3800, rx: 0,
-     synonyms: "Dolo, Dolo 650, Paracetamol", category: "Analgesic", strength: "650mg", dosageForm: "Tablet" },
-  { id: 3, name: "Crocin Advance", salt: "Acetaminophen", paise: 3200, rx: 0,
-     synonyms: "Crocin, Paracetamol", category: "Analgesic", strength: "400mg", dosageForm: "Tablet" },
-  { id: 4, name: "Ibuprofen 400mg", salt: "Ibuprofen", paise: 2800, rx: 0,
-     synonyms: "Brufen, Ibuprofen, Advil", category: "Analgesic", strength: "400mg", dosageForm: "Tablet" },
-  { id: 5, name: "Brufen 400", salt: "Ibuprofen", paise: 3100, rx: 0,
-     synonyms: "Brufen, Ibuprofen, Advil", category: "Analgesic", strength: "400mg", dosageForm: "Tablet" },
-  { id: 6, name: "Aspirin 75mg", salt: "Acetylsalicylic Acid", paise: 2200, rx: 0,
-     synonyms: "Disprin, Aspirin, Ecosprin", category: "Analgesic", strength: "75mg", dosageForm: "Tablet" },
-  { id: 7, name: "Cetirizine 10mg", salt: "Cetirizine", paise: 2800, rx: 0,
-     synonyms: "Allegra, Cetirizine", category: "Antihistamine", strength: "10mg", dosageForm: "Tablet" },
-  { id: 8, name: "Allegra 120", salt: "Fexofenadine", paise: 9500, rx: 0,
-     synonyms: "Allegra, Fexofenadine, Allegra 120", category: "Antihistamine", strength: "120mg", dosageForm: "Tablet" },
-  { id: 9, name: "Amoxicillin 500mg", salt: "Amoxicillin", paise: 7200, rx: 1,
-     synonyms: "Amoxycillin, Amoxicillin", category: "Antibiotic", strength: "500mg", dosageForm: "Capsule" },
-  { id: 10, name: "Azithromycin 500", salt: "Azithromycin", paise: 21500, rx: 1,
-     synonyms: "Azithral, Azithromycin, Zithromax", category: "Antibiotic", strength: "500mg", dosageForm: "Tablet" },
-  { id: 11, name: "Metformin 500mg", salt: "Metformin HCl", paise: 3500, rx: 0,
-     synonyms: "Glycomet, Metformin", category: "Antidiabetic", strength: "500mg", dosageForm: "Tablet" },
-  { id: 12, name: "Amlodipine 5mg", salt: "Amlodipine", paise: 3000, rx: 1,
-     synonyms: "Amlokind, Amlodipine", category: "Antihypertensive", strength: "5mg", dosageForm: "Tablet" },
-  { id: 13, name: "Vitamin C 500", salt: "Ascorbic Acid", paise: 4500, rx: 0,
-     synonyms: "Vitamin C, Ascorbic acid, Limcee", category: "Vitamin", strength: "500mg", dosageForm: "Tablet" },
-  { id: 14, name: "Zincovit", salt: "Zinc + Multivitamin", paise: 5500, rx: 0,
-     synonyms: "Zincovit, Multivitamin", category: "Vitamin", strength: "", dosageForm: "Tablet" },
-  { id: 15, name: "ORS Sachet", salt: "Oral Rehydration Salts", paise: 1200, rx: 0,
-     synonyms: "ORS, Oral Rehydration Salts, Jeera ORS", category: "Rehydration", strength: "", dosageForm: "Sachet" },
-  { id: 16, name: "Omeprazole 20", salt: "Omeprazole", paise: 5200, rx: 0,
-     synonyms: "Omez, Omeprazole, Prilosec", category: "Antacid", strength: "20mg", dosageForm: "Capsule" },
-  { id: 17, name: "Domperidone 10", salt: "Domperidone", paise: 4000, rx: 0,
-     synonyms: "Domstal, Domperidone, Motilium", category: "Antiemetic", strength: "10mg", dosageForm: "Tablet" },
-  { id: 18, name: "Ranitidine 150", salt: "Ranitidine", paise: 3200, rx: 0,
-     synonyms: "Zantac, Ranitidine", category: "Antacid", strength: "150mg", dosageForm: "Tablet" },
-  { id: 19, name: "Cough Syrup 100ml", salt: "Dextromethorphan", paise: 9500, rx: 0,
-     synonyms: "Cough Syrup, Dextromethorphan, Benadryl", category: "Antitussive", strength: "100ml", dosageForm: "Syrup" },
-  { id: 20, name: "Diclofenac Gel 30g", salt: "Diclofenac", paise: 12000, rx: 0,
-     synonyms: "Voveran, Diclofenac, Voltaren", category: "Analgesic", strength: "30g", dosageForm: "Gel" },
-  { id: 21, name: "Pantoprazole 40", salt: "Pantoprazole", paise: 6500, rx: 0,
-     synonyms: "Pan, Pantoprazole", category: "Antacid", strength: "40mg", dosageForm: "Tablet" },
-  { id: 22, name: "Montelukast 10", salt: "Montelukast", paise: 14500, rx: 1,
-     synonyms: "Montair, Montelukast", category: "Antihistamine", strength: "10mg", dosageForm: "Tablet" },
-  { id: 23, name: "Cough Drops", salt: "Menthol", paise: 2500, rx: 0,
-     synonyms: "Cough Drops, Menthol", category: "Antitussive", strength: "", dosageForm: "Lozenge" },
-  { id: 24, name: "Antiseptic Liquid", salt: "Chloroxylenol", paise: 9500, rx: 0,
-     synonyms: "Dettol, Antiseptic, Chloroxylenol", category: "Antiseptic", strength: "200ml", dosageForm: "Liquid" },
-];
+// The catalogue lives in its own module so the import pipeline can read the
+// exact same source. Inventory below refers to entries by catalogue position,
+// never by a hardcoded id: adding a medicine must not silently repoint every
+// stock row in the demo.
+const CATALOGUE = MEDICINES;
 
-// [pharmacy_id, medicine_id, qty_total]
-// 4 medicines with 2-5 units network-wide: #20 (2), #10 (3), #19 (4), #17 (5)
-// 1 out everywhere: #3 (Crocin Advance)
-// shared salts: Acetaminophen (#1,#2,#3), Ibuprofen (#4,#5)
-const INVENTORY: [number, number, number][] = [
-  [1, 1, 120], [2, 1, 80], [3, 1, 60], [4, 1, 40], [5, 1, 30], [6, 1, 50], [7, 1, 25], [8, 1, 70],
-  [1, 2, 60], [2, 2, 40], [3, 2, 30], [4, 2, 20], [5, 2, 15], [6, 2, 25], [7, 2, 10], [8, 2, 35],
-  [1, 4, 3], [2, 4, 3], [3, 4, 3], [4, 4, 3],
-  [1, 5, 20], [2, 5, 10], [3, 5, 15], [4, 5, 5], [6, 5, 10], [8, 5, 12],
-  [1, 6, 40], [3, 6, 25], [5, 6, 20], [7, 6, 15], [8, 6, 30],
-  [1, 7, 50], [2, 7, 35], [4, 7, 25], [6, 7, 30], [8, 7, 20],
-  [1, 8, 12], [3, 8, 8], [6, 8, 10],
-  [1, 9, 2], [2, 9, 1], [3, 9, 2],
-  [2, 10, 3],
-  [1, 11, 25], [4, 11, 20], [7, 11, 15],
-  [1, 12, 18], [2, 12, 12], [5, 12, 10],
-  [1, 13, 90], [2, 13, 60], [3, 13, 40], [8, 13, 50],
-  [1, 14, 45], [2, 14, 30], [6, 14, 25],
-  [1, 15, 70], [3, 15, 50], [5, 15, 40], [7, 15, 30],
-  [1, 16, 30], [2, 16, 20], [4, 16, 18], [6, 16, 22],
-  [1, 17, 2], [2, 17, 2], [3, 17, 1],
-  [1, 18, 15], [2, 18, 10], [5, 18, 8],
-  [2, 19, 4],
-  [2, 20, 1], [3, 20, 1],
-  [1, 21, 22], [2, 21, 14], [5, 21, 9],
-  [1, 22, 16], [3, 22, 11], [6, 22, 7],
-  [1, 23, 60], [2, 23, 40], [8, 23, 30],
-  [1, 24, 35], [4, 24, 20], [6, 24, 15],
+/**
+ * Catalogue entries the demo stocks.
+ *
+ * Addressed by a readable key rather than a number, because "paracetamol 650"
+ * survives an edit to the catalogue and "[3]" does not.
+ */
+const STOCKED: Record<string, string> = {
+  paracetamol500: "Paracetamol||500|Tablet",
+  dolo650: "Paracetamol|Dolo 650|650|Tablet",
+  crocin400: "Paracetamol|Crocin Advance|400|Tablet",
+  brufen400: "Brufen|Ibuprofen|400|Tablet",
+  ibuprofen400: "Ibuprofen||400|Tablet",
+  aspirin75: "Aspirin|Ecosprin|75|Tablet",
+  diclofenac50: "Diclofenac|Voveran|50|Tablet",
+  paracetamolPaed: "Paracetamol (Paediatric)||125|Oral suspension",
+  cetirizine10: "Cetirizine||10|Tablet",
+  fexofenadine120: "Fexofenadine|Allegra|120|Tablet",
+  montelukast10: "Montelukast|Montair|10|Tablet",
+  amoxicillin500: "Amoxicillin|Mox|500|Capsule",
+  azithromycin500: "Azithromycin|Azithral|500|Tablet",
+  ciprofloxacin500: "Ciprofloxacin||500|Tablet",
+  metformin500: "Metformin|Glycomet|500|Tablet",
+  amlodipine5: "Amlodipine|Amlokind|5|Tablet",
+  telmisartan40: "Telmisartan|Telma|40|Tablet",
+  atorvastatin10: "Atorvastatin|Lipitor|10|Tablet",
+  levothyroxine50: "Levothyroxine|Eltroxin|50|Tablet",
+  omeprazole20: "Omeprazole|Omez|20|Capsule",
+  pantoprazole40: "Pantoprazole|Pan|40|Tablet",
+  domperidone10: "Domperidone|Domstal|10|Tablet",
+  ors: "Oral Rehydration Salts|Jeera ORS|null|Sachet",
+  vitaminC: "Vitamin C|Limcee|500|Tablet",
+  multivitamin: "Multivitamin with Minerals|Zincovit|null|Tablet",
+  vitaminD3: "Vitamin D3|Uprise D3|60000|Capsule",
+  ironTab: "Ferrous Ascorbate|Orofer XT|100|Tablet",
+  zincTab: "Zinc|Zincovit|20|Tablet",
+  coughSyrup: "Cough Syrup (Antitussive)||100|Syrup",
+  dmSyrup: "Dextromethorphan|Benadryl|100|Syrup",
+  chlorhexidine: "Chlorhexidine|Hexidine|0.2|Mouthwash",
+  clotrimazole: "Clotrimazole|Canesten|1|Cream",
+  povidoneIodine: "Povidone Iodine|Betadine|10|Solution",
+  dettol: "Chloroxylenol|Dettol|4.8|Liquid",
+  eyeDrops: "Carboxymethylcellulose|Refresh Tears|0.5|Eye drops",
+  otrivin: "Xylometazoline|Otrivin|0.1|Nasal drops",
+  salbutamol: "Salbutamol|Ventolin|100|Inhaler",
+  sertraline: "Sertraline||25|Tablet",
+  sildenafil: "Sildenafil|Viagra|50|Tablet",
+  desloratadine: "Levocetirizine||5|Tablet",
+  saridon: "Aceclofenac|Hifenac|100|Tablet",
+  diclofenacGel: "Diclofenac (Topical)|Voveran Gel|1|Gel",
+  thermometer: "Digital Thermometer||null|Device",
+  bpMonitor: "Blood Pressure Monitor||null|Device",
+  gloves: "Surgical Mask||null|Device",
+};
+
+/**
+ * [catalogue key, pharmacy ids, quantity each]
+ *
+ * The shape of the demo matters as much as the numbers: a few medicines are
+ * deliberately scarce or absent network-wide so the substitution, peer-borrow
+ * and "out of stock everywhere" paths have something real to work on.
+ */
+const INVENTORY_PLAN: [string, number[], number[]][] = [
+  ["paracetamol500", [1, 2, 3, 4, 5, 6, 7, 8], [120, 80, 60, 40, 30, 50, 25, 70]],
+  ["dolo650", [1, 2, 3, 4, 5, 6, 7, 8], [60, 40, 30, 20, 15, 25, 10, 35]],
+  ["crocin400", [1], [0]],
+  ["brufen400", [1, 2, 3, 4, 6, 8], [20, 10, 15, 5, 10, 12]],
+  ["ibuprofen400", [1, 2, 3, 4], [3, 3, 3, 3]],
+  ["aspirin75", [1, 3, 5, 7, 8], [40, 25, 20, 15, 30]],
+  ["diclofenac50", [1, 2, 3, 4, 6, 8], [50, 35, 25, 25, 30, 20]],
+  ["paracetamolPaed", [1, 2, 3], [25, 15, 20]],
+  ["cetirizine10", [1, 2, 4, 6, 8], [50, 35, 25, 30, 20]],
+  ["fexofenadine120", [1, 3, 6], [12, 8, 10]],
+  ["montelukast10", [1, 2, 3], [2, 1, 2]],
+  ["amoxicillin500", [2], [3]],
+  ["azithromycin500", [1, 3], [2, 1]],
+  ["ciprofloxacin500", [1, 2, 4, 6], [22, 14, 9, 12]],
+  ["metformin500", [1, 2, 5], [18, 12, 10]],
+  ["amlodipine5", [1, 2, 3, 5, 7], [30, 20, 18, 15, 12]],
+  ["telmisartan40", [3, 5, 6], [25, 18, 14]],
+  ["atorvastatin10", [1, 2, 4], [20, 16, 11]],
+  ["levothyroxine50", [2, 3, 6], [12, 9, 7]],
+  ["omeprazole20", [1, 2, 3, 5, 7], [45, 30, 25, 20, 15]],
+  ["pantoprazole40", [1, 2, 4, 6, 8], [30, 20, 18, 22, 16]],
+  ["domperidone10", [1, 3, 5], [24, 18, 14]],
+  ["ors", [1, 2, 3, 4, 5, 6, 7, 8], [70, 50, 40, 30, 25, 35, 20, 45]],
+  ["vitaminC", [1, 2, 3, 8], [90, 60, 40, 50]],
+  ["multivitamin", [1, 2, 6], [45, 30, 25]],
+  ["vitaminD3", [2, 4, 6], [20, 15, 12]],
+  ["ironTab", [1, 3, 5], [18, 12, 10]],
+  ["zincTab", [1, 2, 4, 8], [40, 28, 22, 30]],
+  ["coughSyrup", [1, 2, 3, 5], [26, 18, 14, 10]],
+  ["dmSyrup", [2, 3], [2, 2]],
+  ["chlorhexidine", [1, 2, 4], [22, 16, 10]],
+  ["clotrimazole", [1, 3, 5], [20, 14, 12]],
+  ["povidoneIodine", [2, 4, 6], [30, 22, 18]],
+  ["dettol", [1, 2, 3, 4, 5, 6, 7, 8], [60, 45, 35, 30, 25, 40, 20, 50]],
+  ["eyeDrops", [1, 2, 4, 6], [15, 12, 9, 7]],
+  ["otrivin", [2, 3, 5], [18, 14, 11]],
+  ["salbutamol", [1, 3, 6], [9, 6, 5]],
+  ["sertraline", [2, 4], [10, 8]],
+  ["sildenafil", [3], [4]],
+  ["desloratadine", [1, 2, 5, 7], [16, 12, 10, 8]],
+  ["saridon", [1, 2, 3, 4, 5, 6, 7, 8], [35, 28, 22, 18, 14, 20, 10, 25]],
+  ["diclofenacGel", [1, 2, 4], [24, 18, 15]],
+  ["thermometer", [1, 2, 3, 4, 5], [12, 9, 7, 6, 5]],
+  ["bpMonitor", [1, 3, 6], [4, 3, 2]],
+  ["gloves", [1, 2, 3, 4, 5, 6, 7, 8], [50, 40, 30, 25, 20, 35, 15, 45]],
 ];
 
 function genPassword(): string {
@@ -178,19 +241,116 @@ export async function seedDatabase(): Promise<void> {
     );
   }
 
+  // --- catalogue -------------------------------------------------------------
+  //
+  // Ids are assigned from catalogue order so the demo is reproducible, and the
+  // key -> id map is used by the inventory plan below.
+  const catalogueIds = new Map<string, number>();
+  let nextCatalogueId = 1;
   for (const m of MEDICINES) {
+    const displayName = m.brand ? `${m.brand}` : `${m.generic} ${strengthLabel(m)}`.trim();
+    const aliases = [
+      m.generic,
+      ...(m.ingredients ?? []),
+      ...(m.brand ? [m.brand] : []),
+      ...(m.aliases ?? []),
+    ]
+      // De-duplicated case-insensitively, order preserved.
+      .filter((v, i, arr) => arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i)
+      .join(",");
+
     await queryRun(
-      `INSERT INTO medicines (id, name, salt, price_paise, rx_required, synonyms, category, strength, dosage_form)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [m.id, m.name, m.salt, m.paise, m.rx, m.synonyms, m.category, m.strength, m.dosageForm]
+      `INSERT INTO medicines
+         (id, display_name, generic_name, brand_name, ingredients, strength_value, strength_unit,
+          dosage_form, route, category, subcategory, therapeutic_class, manufacturer,
+          requires_prescription, rx_basis, regulatory_status, verification_status,
+          source, source_ref, package_size, barcode, aliases, description,
+          price_paise, is_active, name, salt, rx_required, synonyms, strength, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+               $24,1,$25,$26,$27,$28,$29,$30,$30)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        nextCatalogueId,
+        displayName,
+        m.generic,
+        m.brand ?? null,
+        (m.ingredients ?? []).join(", ") || null,
+        m.strengthValue ?? null,
+        m.strengthUnit ?? null,
+        m.form,
+        m.route ?? null,
+        m.category,
+        m.subcategory ?? null,
+        m.therapeuticClass ?? null,
+        m.manufacturer ?? null,
+        m.rx ? 1 : 0,
+        // How the flag was arrived at. Never "ai": the prescription status is
+        // curated knowledge, and the provenance has to say so.
+        "curated",
+        m.rx ? "prescription" : "otc",
+        m.verification ?? "unverified",
+        m.verification === "demo" ? "demo-fixture" : "curated-demo",
+        m.sourceRef ?? null,
+        m.packageSize ?? null,
+        null, // barcode: never invented
+        aliases,
+        null, // description: no clinical claims written by hand
+        m.pricePaise,
+        displayName,
+        m.generic,
+        m.rx ? 1 : 0,
+        aliases,
+        strengthLabel(m),
+        now,
+      ]
     );
+    const naturalKey = `${m.generic}|${m.brand ?? ""}|${m.strengthValue ?? "null"}|${m.form}`;
+    catalogueIds.set(naturalKey, nextCatalogueId);
+    // Also indexed brand-first. The stock plan is written by humans, who think
+    // in brands; without this, every brand-led key fails for a reason that has
+    // nothing to do with the data.
+    if (m.brand) {
+      catalogueIds.set(
+        `${m.brand}|${m.generic}|${m.strengthValue ?? "null"}|${m.form}`,
+        nextCatalogueId
+      );
+    }
+    priceLookup = new Map(priceLookup).set(nextCatalogueId, m.pricePaise);
+    nextCatalogueId++;
   }
 
-  for (const [pid, mid, qty] of INVENTORY) {
-    await queryRun(
-      "INSERT INTO inventory (pharmacy_id, medicine_id, qty_total, qty_locked, expiry_date) VALUES ($1, $2, $3, 0, $4)",
-      [pid, mid, qty, expiry]
-    );
+  /**
+   * Resolves a stock plan key to a catalogue row.
+   *
+   * Refuses loudly rather than guessing. A typo here would otherwise leave the
+   * demo quietly missing a medicine that the walkthrough talks about.
+   */
+  function idForKey(key: string): number {
+    const spec = STOCKED[key];
+    if (!spec) throw new Error(`Unknown catalogue key in the stock plan: ${key}`);
+    const [generic, brand, strength, form] = spec.split("|");
+    const id = catalogueIds.get(`${generic}|${brand}|${strength}|${form}`);
+    if (!id) {
+      throw new Error(`Catalogue key "${key}" does not resolve: no entry matches ${spec}`);
+    }
+    return id;
+  }
+
+  for (const [key, pharmacyIds, quantities] of INVENTORY_PLAN) {
+    const medicineId = idForKey(key);
+    for (const [i, pid] of pharmacyIds.entries()) {
+      const qty = quantities[i] ?? 0;
+      if (qty <= 0) continue;
+      // Awaited in a loop, deliberately. A fire-and-forget insert races the next
+      // one and trips the primary key on (pharmacy_id, medicine_id).
+      await queryRun(
+        `INSERT INTO inventory (pharmacy_id, medicine_id, qty_total, qty_locked, expiry_date,
+                                price_paise, batch_no, last_verified_at, updated_at)
+         VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $7)
+         ON CONFLICT (pharmacy_id, medicine_id) DO NOTHING`,
+        [pid, medicineId, qty, expiry, pharmacyPriceFor(pid, medicineId), `DEMO-${medicineId}-A`, now]
+      );
+    }
   }
 
   const credentials: DemoCredentials[] = [];

@@ -58,9 +58,21 @@ CREATE TABLE IF NOT EXISTS inventory (
   qty_total INTEGER NOT NULL DEFAULT 0,
   qty_locked INTEGER NOT NULL DEFAULT 0,
   expiry_date TEXT,
+  -- What THIS pharmacy charges. The catalogue price is a list price and is not a
+  -- claim about any real pharmacy's pricing, so the two are kept apart.
+  price_paise INTEGER NOT NULL DEFAULT 0,
+  batch_no TEXT,
+  last_verified_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pharmacy_id, medicine_id),
-  CHECK (qty_locked >= 0 AND qty_locked <= qty_total)
+  -- The overselling guard, enforced by the database rather than by every caller
+  -- remembering to check. A CHECK is the last line of defence: application code
+  -- can have a bug, this cannot.
+  CHECK (qty_locked >= 0 AND qty_locked <= qty_total),
+  CHECK (qty_total >= 0)
 );
+CREATE INDEX IF NOT EXISTS idx_inventory_medicine ON inventory (medicine_id);
+CREATE INDEX IF NOT EXISTS idx_inventory_expiry ON inventory (expiry_date);
 
 CREATE TABLE IF NOT EXISTS requests (
   id SERIAL PRIMARY KEY,
@@ -533,17 +545,129 @@ CREATE INDEX IF NOT EXISTS idx_delivery_offers_delivery ON delivery_offers (deli
 --
 -- All statements are idempotent, so this block is safe to re-run.
 -- =============================================================
--- Catalogue fields the search brain needs.
+-- =============================================================
+-- Medicine catalogue
 --
--- Added as ALTERs, not inline: CREATE TABLE IF NOT EXISTS is a no-op on an
--- existing table, so an inline addition never reaches a deployed database and
--- only fails at runtime.
-ALTER TABLE medicines ADD COLUMN IF NOT EXISTS synonyms TEXT;        -- comma separated
-ALTER TABLE medicines ADD COLUMN IF NOT EXISTS category TEXT;        -- Analgesic, Antibiotic...
-ALTER TABLE medicines ADD COLUMN IF NOT EXISTS strength TEXT;        -- "500mg"
-ALTER TABLE medicines ADD COLUMN IF NOT EXISTS dosage_form TEXT;    -- Tablet, Syrup, Gel
-CREATE INDEX IF NOT EXISTS idx_medicines_category ON medicines (category);
-CREATE INDEX IF NOT EXISTS idx_medicines_salt ON medicines (LOWER(salt));
+-- One row is ONE product presentation: a generic ingredient at a specific
+-- strength, in a specific dosage form. That is deliberate. A 500mg tablet and a
+-- 650mg tablet are not two search results for the same thing — they are two
+-- different medicines, and merging them is how a patient takes the wrong dose.
+-- A brand is recorded as a brand, never confused with the generic it contains.
+--
+-- Nothing in this table implies that any pharmacy stocks the product, or that it
+-- is legally available anywhere in particular. Stock lives in `inventory`,
+-- which references this table.
+-- =============================================================
+CREATE TABLE IF NOT EXISTS medicines (
+  id SERIAL PRIMARY KEY,
+
+  -- Identity
+  display_name TEXT NOT NULL,           -- what the UI shows: "Paracetamol 500mg"
+  generic_name TEXT NOT NULL,           -- "Paracetamol" — the ingredient, not a brand
+  brand_name TEXT,                       -- NULL unless a real, well-known brand
+  ingredients TEXT,                      -- comma separated; >1 means a combination
+
+  -- Presentation, each of which is a distinct catalogue entry
+  strength_value NUMERIC,                -- 500
+  strength_unit TEXT,                    -- mg | ml | g | mcg | IU | %
+  dosage_form TEXT,                      -- Tablet | Capsule | Syrup | ...
+  route TEXT,                            -- Oral | Topical | Inhalation | ...
+
+  -- Classification
+  category TEXT NOT NULL,
+  subcategory TEXT,
+  therapeutic_class TEXT,                -- e.g. "NSAID"
+
+  -- Provenance and regulation
+  manufacturer TEXT,                     -- NULL unless verified
+  requires_prescription INTEGER NOT NULL DEFAULT 0,
+  -- How the prescription flag was arrived at. Never 'ai' and never guessed.
+  rx_basis TEXT,                         -- curated | unverified | regulatory
+  regulatory_status TEXT,                -- e.g. 'prescription' | 'otc' | NULL
+  verification_status TEXT NOT NULL DEFAULT 'unverified',  -- verified | unverified | demo
+  -- Where this row came from, and the identifier in that source. Makes an
+  -- imported record auditable instead of anonymous.
+  source TEXT NOT NULL DEFAULT 'curated-demo',
+  source_ref TEXT,
+  package_size TEXT,                     -- "15 tablets"
+  barcode TEXT,                          -- NULL unless actually verified
+
+  -- Search
+  aliases TEXT,                          -- comma separated names and misspelling variants
+  description TEXT,
+
+  price_paise INTEGER NOT NULL DEFAULT 0,   -- demo retail price, fictional
+  is_active INTEGER NOT NULL DEFAULT 1,
+
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Legacy columns kept for compatibility with the rest of the app. `name` is the
+-- display name and `salt` the generic; both are maintained here so the two views
+-- can never drift apart.
+--
+-- The full set is repeated as ALTERs on purpose. `CREATE TABLE IF NOT EXISTS` is
+-- a no-op against a database that already has the table, so a column added to
+-- the CREATE above would silently not exist there — and the failure would only
+-- appear at runtime, mid-demo, as "column does not exist".
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS price_paise INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS generic_name TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS brand_name TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS ingredients TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS strength_value NUMERIC;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS strength_unit TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS dosage_form TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS route TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS subcategory TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS therapeutic_class TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS manufacturer TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS requires_prescription INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS rx_basis TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS regulatory_status TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS verification_status TEXT NOT NULL DEFAULT 'unverified';
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'curated-demo';
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS source_ref TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS package_size TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS barcode TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS aliases TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS updated_at TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS created_at TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS salt TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS rx_required INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS synonyms TEXT;
+ALTER TABLE medicines ADD COLUMN IF NOT EXISTS strength TEXT;
+
+-- Inventory gains a price, a batch, and a "when was this last checked" stamp. A
+-- catalogue entry says nothing about any pharmacy's stock; this is the only
+-- place that claim can come from.
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS price_paise INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS batch_no TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS last_verified_at TEXT;
+ALTER TABLE inventory ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT '';
+
+-- A barcode identifies exactly one product, so it is unique when present.
+-- Postgres treats NULLs as distinct, which is what we want: many rows simply do
+-- not have one, and that must not collide.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_medicines_barcode
+  ON medicines (barcode) WHERE barcode IS NOT NULL;
+-- The natural key of a catalogue entry. Prevents the same presentation being
+-- imported twice under different rows.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_medicines_natural_key
+  ON medicines (LOWER(generic_name), COALESCE(brand_name, ''), COALESCE(strength_value::text, ''),
+                COALESCE(strength_unit, ''), COALESCE(dosage_form, ''));
+CREATE INDEX IF NOT EXISTS idx_medicines_category ON medicines (category, subcategory);
+CREATE INDEX IF NOT EXISTS idx_medicines_generic ON medicines (LOWER(generic_name));
+CREATE INDEX IF NOT EXISTS idx_medicines_brand ON medicines (LOWER(brand_name)) WHERE brand_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_medicines_form ON medicines (dosage_form, strength_unit);
+CREATE INDEX IF NOT EXISTS idx_medicines_rx ON medicines (requires_prescription);
+CREATE INDEX IF NOT EXISTS idx_medicines_source ON medicines (source, source_ref);
+CREATE INDEX IF NOT EXISTS idx_medicines_active ON medicines (is_active);
 
 ALTER TABLE payment_audit ADD COLUMN IF NOT EXISTS metadata_json TEXT;
 

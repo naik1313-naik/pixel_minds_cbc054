@@ -35,6 +35,9 @@ const STOPWORDS = new Set([
   "drugs", "tablet", "tablets", "tab", "capsule", "capsules", "syrup", "strip", "order",
   "buy", "get", "where", "which", "what", "is", "are", "do", "you", "have", "i", "want",
   "need", "and", "or", "for", "to", "my", "near", "closest", "best", "cheapest",
+  // Filler that carries no product identity: without these, "something for my
+  // allergy" is scored as a search for the medicine called "something".
+  "something", "anything", "some", "thing", "stuff",
 ]);
 
 /**
@@ -210,7 +213,7 @@ export interface ScoredMedicine {
   score: number;
   /** Human-readable contributions, strongest first. */
   reasons: string[];
-  matchedOn: "exact" | "alternative" | "weak";
+  matchedOn: "exact" | "alternative" | "weak" | "category";
   /** Present when this is a different strength or form of the same substance. */
   differsBy: string | null;
   rxRequired: boolean;
@@ -240,8 +243,12 @@ export function scoreMedicine(m: Medicine, input: ScoreInput): ScoredMedicine | 
     .split(",")
     .map((s) => normalize(s))
     .filter(Boolean);
-  const strength = normalize(input.strength ?? m.strength ?? "");
-  const form = normalize(input.form ?? m.dosage_form ?? "");
+  // The medicine's own strength/form, kept strictly separate from the query's.
+  // These used to fall back to the query value, which made every candidate look
+  // like it matched the strength that was asked for — so "paracetamol 500mg"
+  // ranked a 400mg tablet as a full match, reason and all.
+  const medicineStrength = normalize(m.strength ?? "");
+  const medicineForm = normalize(m.dosage_form ?? "");
   const qStrength = normalize(input.strength ?? extractStrength(input.query) ?? "");
   const qForm = normalize(input.form ?? extractForm(input.query) ?? "");
 
@@ -275,32 +282,46 @@ export function scoreMedicine(m: Medicine, input: ScoreInput): ScoredMedicine | 
   }
 
   // 3. Generic / salt. The strongest signal after the name, and how "ORS" or
-  //    "paracetamol" find a branded product. The last clause catches a generic
-  //    that is listed as one of the product's synonyms, which is how
-  //    "paracetamol" reaches a product catalogued only as "Dolo 650".
-  const saltHit =
-    saltN === q ||
-    fuzzyEquals(q, saltN) ||
-    hits(saltN) ||
-    (saltN.length > 3 && synonyms.some((s) => fuzzyEquals(saltN, s)));
+  //    "paracetamol" find a branded product. Only the query side is compared —
+  //    testing the salt against the product's own synonym list would match every
+  //    catalogue entry, because each one lists its own generic there, and the
+  //    whole catalogue would come back for every search.
+  const saltHit = saltN === q || fuzzyEquals(q, saltN) || hits(saltN);
   if (saltHit) {
     score += SEARCH_WEIGHTS.genericSalt;
     reasons.push(`same active ingredient (${m.salt})`);
   }
 
-  // 4. Strength — scored, but never used to merge two entries together.
-  const strengthKnown = Boolean(strength);
-  if (qStrength && strengthKnown) {
-    if (qStrength === strength) {
+  // 4 & 5. Strength and dosage form.
+  //
+  // These only ever *reinforce* a match. On their own they mean nothing — half
+  // the catalogue is "500mg Tablet" — so a strength/form hit without a name,
+  // generic or synonym relationship contributes no score and no reason. Without
+  // that gate, "paracetamol 500mg tablets" returned every 500mg tablet in the
+  // pharmacy as a legitimate result.
+  const sameIngredient =
+    saltN === q ||
+    fuzzyEquals(q, saltN) ||
+    hits(saltN) ||
+    synonymHit !== undefined ||
+    exactNameHit ||
+    hits(nameN);
+
+  const strengthKnown = Boolean(medicineStrength);
+  if (qStrength && strengthKnown && sameIngredient) {
+    if (qStrength === medicineStrength) {
       score += SEARCH_WEIGHTS.strength;
       reasons.push(`strength ${m.strength} as asked for`);
     }
   }
 
-  // 5. Dosage form.
-  const formKnown = Boolean(form);
-  if (qForm && formKnown) {
-    if (qForm === form || qForm === `${form}s` || `${qForm}s` === form) {
+  const formKnown = Boolean(medicineForm);
+  if (qForm && formKnown && sameIngredient) {
+    const formsMatch =
+      qForm === medicineForm ||
+      qForm === `${medicineForm}s` ||
+      `${qForm}s` === medicineForm;
+    if (formsMatch) {
       score += SEARCH_WEIGHTS.form;
       reasons.push(`${m.dosage_form}`);
     }
@@ -320,11 +341,18 @@ export function scoreMedicine(m: Medicine, input: ScoreInput): ScoredMedicine | 
   // the wrong dose.
   let matchedOn: ScoredMedicine["matchedOn"] = "weak";
   let differsBy: string | null = null;
-  const sameIngredient = saltHit || synonymHit || exactNameHit || hits(nameN);
   if (sameIngredient) {
     const differences: string[] = [];
-    if (qStrength && strengthKnown && qStrength !== strength) differences.push(`strength ${m.strength}`);
-    if (qForm && formKnown && qForm !== form && `${qForm}s` !== form && `${form}s` !== qForm) {
+    if (qStrength && strengthKnown && qStrength !== medicineStrength) {
+      differences.push(`strength ${m.strength}`);
+    }
+    if (
+      qForm &&
+      formKnown &&
+      qForm !== medicineForm &&
+      `${qForm}s` !== medicineForm &&
+      `${medicineForm}s` !== qForm
+    ) {
       differences.push(`${m.dosage_form} form`);
     }
     if (differences.length) {
@@ -369,27 +397,63 @@ export interface ParsedQuery {
   empty: boolean;
 }
 
+/**
+ * Symptom or intent phrase -> catalogue category.
+ *
+ * These are *categories*, which is all this is allowed to be. The parser never
+ * infers a medicine from a symptom, because that would be making a clinical
+ * judgement in a search box.
+ */
 const CATEGORY_HINTS: Record<string, string> = {
-  pain: "Analgesic",
-  painkiller: "Analgesic",
-  analgesic: "Analgesic",
-  fever: "Analgesic",
-  antibiotic: "Antibiotic",
-  allergy: "Antihistamine",
-  antihistamine: "Antihistamine",
-  sugar: "Antidiabetic",
-  diabetes: "Antidiabetic",
-  bp: "Antihypertensive",
-  bloodpressure: "Antihypertensive",
-  hypertension: "Antihypertensive",
-  vitamin: "Vitamin",
-  dehydration: "Rehydration",
-  acidity: "Antacid",
-  gastritis: "Antacid",
-  vomiting: "Antiemetic",
-  nausea: "Antiemetic",
-  cough: "Antitussive",
-  antiseptic: "Antiseptic",
+  pain: "Pain relief and fever",
+  painkiller: "Pain relief and fever",
+  analgesic: "Pain relief and fever",
+  fever: "Pain relief and fever",
+  antibiotic: "Antibiotics and antimicrobials",
+  allergy: "Allergy and antihistamines",
+  antihistamine: "Allergy and antihistamines",
+  sugar: "Diabetes medicines",
+  diabetes: "Diabetes medicines",
+  bp: "Blood pressure and cardiovascular",
+  bloodpressure: "Blood pressure and cardiovascular",
+  hypertension: "Blood pressure and cardiovascular",
+  cholesterol: "Cholesterol medicines",
+  thyroid: "Thyroid medicines",
+  vitamin: "Vitamins and minerals",
+  dehydration: "Antacids and oral rehydration",
+  acidity: "Antacids and oral rehydration",
+  gastritis: "Antacids and oral rehydration",
+  acidityreflux: "Gastrointestinal and acidity",
+  vomiting: "Gastrointestinal and acidity",
+  nausea: "Gastrointestinal and acidity",
+  cough: "Cold, cough and respiratory",
+  cold: "Cold, cough and respiratory",
+  asthma: "Asthma and respiratory inhalers",
+  inhaler: "Asthma and respiratory inhalers",
+  anxiety: "Mental health medicines",
+  depression: "Mental health medicines",
+  antifungal: "Antifungal and antiviral",
+  worms: "Antiparasitic medicines",
+  skincare: "Dermatology and skin care",
+  skin: "Dermatology and skin care",
+  eye: "Eye drops and ophthalmic",
+  ear: "Ear drops and otic",
+  dental: "Oral and dental care",
+  tooth: "Oral and dental care",
+  joint: "Bone, joint and muscle",
+  bone: "Bone, joint and muscle",
+  kidney: "Kidney and urinary health",
+  liver: "Liver and digestive health",
+  firstaid: "First aid and antiseptics",
+  antiseptic: "First aid and antiseptics",
+  wound: "Wound care and dressings",
+  bandage: "Wound care and dressings",
+  injection: "Injections and infusions",
+  nasal: "Nasal sprays and drops",
+  syrup: "Oral liquids and syrups",
+  tablet: "Tablets and capsules",
+  emergency: "Emergency care",
+  device: "Devices, diagnostics and essentials",
 };
 
 /**
