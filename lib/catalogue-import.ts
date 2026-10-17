@@ -303,9 +303,10 @@ RETURNING (xmax = 0) AS inserted
 `;
 
 function displayNameFor(r: CatalogueRecord): string {
-  if (r.brand_name) return r.brand_name;
   const strength = r.strength_value !== null ? `${r.strength_value}${r.strength_unit ?? ""}` : "";
-  return `${r.generic_name} ${strength}`.trim();
+  const genericLabel = `${r.generic_name} ${strength}`.trim();
+  // Same rule as the seed: a brand on its own does not identify a medicine.
+  return r.brand_name ? `${r.brand_name} (${genericLabel})` : genericLabel;
 }
 
 function strengthTextFor(r: CatalogueRecord): string {

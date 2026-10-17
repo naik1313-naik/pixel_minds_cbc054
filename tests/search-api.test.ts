@@ -101,15 +101,16 @@ describe("search endpoint", () => {
   it("keeps a different strength out of the exact list", async () => {
     const r = await search("paracetamol 500mg tablets");
     const names = r.exact.map((e) => e.medicine.name);
-    expect(names).toContain("Paracetamol 500mg");
+    expect(names.some((n) => n.startsWith("Paracetamol 500mg"))).toBe(true);
     // A 400mg and a 650mg tablet are the same substance but not the same
     // medicine; conflating them is how someone takes the wrong dose.
-    expect(names).not.toContain("Dolo 650");
-    expect(names).not.toContain("Crocin Advance");
+    expect(names.some((n) => n.includes("Dolo 650"))).toBe(false);
+    expect(names.some((n) => n.includes("Crocin Advance"))).toBe(false);
 
     const alts = r.alternatives.map((a) => a.medicine.name);
-    expect(alts).toContain("Dolo 650");
-    expect(r.alternatives.find((a) => a.medicine.name === "Dolo 650")!.differsBy).toMatch(/650mg/);
+    expect(alts.some((n) => n.includes("Dolo 650"))).toBe(true);
+    const dolo = r.alternatives.find((a) => a.medicine.name.includes("Dolo 650"))!;
+    expect(dolo.differsBy).toMatch(/650mg/);
   });
 
   it("does not return the whole catalogue for one query", async () => {

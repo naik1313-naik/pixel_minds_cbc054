@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Clock, MapPin, Navigation, Package, Pill, Search, Store, Truck } from "lucide-react";
 import { Alert, Badge, Button, Card, Input, StatusPill, toast } from "@/components/ui";
 import { api, formatRupees, timeAgo } from "@/lib/client";
+import CatalogueBrowser from "@/components/customer/CatalogueBrowser";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -135,8 +136,15 @@ export default function CustomerApp({ customerName }: { customerName: string }) 
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Hello, {customerName.split(" ")[0]}</h1>
-        <p className="text-sm text-slate-500">Search a medicine to see live availability across the network.</p>
+        <p className="text-sm text-slate-500">
+          Search a medicine to see live availability across the network, or browse the catalogue by
+          category if you know what you need but not what it is called.
+        </p>
       </div>
+
+      {/* Browsing sits beside search, not behind it: "my blood pressure tablets"
+          is a category question, not a string-matching one. */}
+      <CatalogueBrowser onPick={(id) => setSelected(id)} />
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Card className="p-4">

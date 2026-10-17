@@ -514,17 +514,135 @@ approval. Set `MM_KYC_ENDPOINT`/`MM_KYC_API_KEY` to route checks to a real gatew
 
 ---
 
+---
+
+## Medicine catalogue
+
+**123 entries, 41 categories, 180 pharmacy stock rows.** One row is one *presentation*: an
+ingredient at a strength, in a form, by a route.
+
+```
+medicines                                  inventory  (per pharmacy, references medicines.id)
+  display_name      "Dolo 650 (Paracetamol 650mg)"    pharmacy_id  ─┐
+  generic_name      "Paracetamol"                      medicine_id ─┼─ FK
+  brand_name        "Dolo 650"      ← a brand, not     qty_total     │
+  strength_value    650                                 qty_locked   │
+  strength_unit     mg                                  expiry_date  │
+  dosage_form       Tablet                              price_paise  │
+  route             Oral                                batch_no     │
+  category          Pain relief and fever              last_verified_at
+  subcategory       Analgesic
+  therapeutic_class Analgesic / antipyretic
+  requires_prescription  0|1        ← catalogue data, never inferred
+  rx_basis          "curated"       ← how that flag was decided
+  verification_status unverified | verified | demo
+  source / source_ref                 ← provenance, on every row
+  barcode           NULL            ← never invented
+  manufacturer      NULL            ← never invented
+```
+
+A brand is never merged into its generic, and **two strengths are never the same row**. Paracetamol
+exists at 400mg, 500mg and 650mg as three entries, because a 400mg tablet is not a 650mg tablet and
+conflating them is how somebody takes the wrong dose.
+
+### What the data does and does not claim
+
+| | |
+|---|---|
+| Medicines and brands | Real, widely-known products |
+| `manufacturer`, `barcode` | **NULL wherever unknown.** No GST number or barcode is invented — a plausible-looking fabrication would be acted on |
+| `requires_prescription` | `rx_basis = 'curated'`. Right for antibiotics, steroids, opioids, benzodiazepines; **advisory** everywhere else. Not a lookup against the CDSCO register, and the UI shows the basis next to the badge |
+| `price_paise` | **Fictional.** No real price is claimed anywhere |
+| Availability in India | **Not implied** by a product existing |
+| `verification_status = 'demo'` | The two deliberately invented rows, so the catalogue can be shown handling a controlled-substance-shaped entry. Never presented as real |
+
+Two rows are marked `demo` on purpose. The rest are real products — this is not "every medicine in
+the world", it is a catalogue that grows as verified data becomes available.
+
+### Commands
+
+```bash
+npm run db:reset                              # seeds the catalogue + inventory
+npm run catalogue:import -- samples/catalogue-sample.csv           # DRY RUN
+npm run catalogue:import -- samples/catalogue-sample.csv --apply   # write
+npm run catalogue:import -- data.json --apply --source gov-open-data --source-ref batch-7
+```
+
+Sample files are in `samples/` and are **demonstration data** — one row in each is deliberately
+invalid so the error reporting is visible when you run it.
+
+### Import pipeline
+
+`lib/catalogue-import.ts` + `scripts/import-catalogue.mjs`, written for the day somebody hands you a
+regulator's open data:
+
+- **Dry run by default.** A few thousand rows should be something you *read* before committing to,
+  not something that happens because you typed a path. The dry run's summary is the real run's
+  summary — it checks the real database for what is new.
+- **Never deletes.** A row missing from the source file stays. Absence is not a deletion signal, and
+  treating it as one is how a partial export wipes a catalogue.
+- **Idempotent** on the natural key. Verified by running the sample twice: 6 added, then 0 added /
+  6 updated.
+- **Errors carry row numbers**, all in one pass.
+- **Barcode collisions are rejected, not merged** — within the file, and by a unique index.
+- **An import can never flip a prescription flag.** The upsert deliberately omits
+  `requires_prescription` from its SET list. Flipping a regulatory status from a spreadsheet is
+  exactly what should need a person. There is a test that fails if that changes.
+- **Provenance on every row**: `source`, `source_ref`, `verification_status = 'unverified'`.
+- CSV and JSON, batched (default 200, capped at 1000), no external CSV dependency.
+
+### Sample CSV format
+
+```csv
+generic_name,brand_name,ingredients,strength_value,strength_unit,dosage_form,route,category,subcategory,requires_prescription,rx_basis,regulatory_status,verification_status,source,source_ref,package_size,barcode,aliases,price_paise,is_active
+Cefixime,,Cefixime,200,mg,Tablet,Oral,Antibiotics and antimicrobials,Cephalosporin,yes,curated,prescription,unverified,demo-sample,DEMO-CSV-001,10 tablets,,cefixime|cefix,34000,true
+```
+
+Only `generic_name`, `dosage_form` and `category` are required. `"500mg"` is accepted and split.
+`yes/no/true/false/1/0/Y/N` are all accepted for booleans.
+
+### Adding a category
+
+Add the string to `CATEGORIES` in `lib/catalogue-data.ts` and add entries. **Nothing else changes** —
+the browse filters are derived from the data with `array_agg`, not from a hardcoded list.
+
+### Availability is never implied
+
+A catalogue row says a product exists. It says nothing about who stocks it. Every availability
+number in the UI comes from `inventory`, joined at query time, and the browser shows "Not stocked"
+rather than hiding the row.
+
+### Search and the local AI ranking
+
+`lib/medicine-search.ts` — no model, no API key, no network:
+
+- normalisation: case, punctuation, whitespace, accents, every dash variant, full-width digits;
+- bounded Damerau-Levenshtein (plain Levenshtein charges two edits for "teh" → "the"); the budget
+  scales with length so a three-letter query forgives nothing;
+- transparent weights in one exported object;
+- a natural-language parser that **echoes what it understood**.
+
+Four rules the implementation exists to enforce:
+
+1. Availability is read from the inventory row at query time, never inferred.
+2. **Prescription status is reported, never scored.** Ranking an Rx option differently because it
+   needs a prescription would walk a patient towards a worse outcome for a clinical reason.
+3. A different strength or form is an **alternative**, bucketed separately with the difference named.
+4. "nearby" without a number applies **no** distance filter. Inventing a radius produces a list that
+   looks tailored and is not.
+
+---
+
 ## Seed highlights (for the demo)
 
 | Medicine | Why it matters |
 |---|---|
-| Paracetamol / Dolo / Crocin | share salt (Acetaminophen) → substitutes |
-| Ibuprofen / Brufen | share salt (Ibuprofen) → substitutes |
-| Crocin Advance | **out of stock everywhere** → lost sale + substitutes |
-| Domperidone 10 | only **5 units** network-wide → competing customers |
-| Cough Syrup 100ml | preferred pharmacy has 0, a peer has stock → borrow + ledger |
-| Amoxicillin 500 (rx) | requires pharmacist verification before confirm |
-| Selected low stock | #20 (2), #19 (4), #10 (3), #17 (5) — split / partial demos |
+| Paracetamol 400 / 500 / 650mg | same ingredient, three strengths → three entries, never merged |
+| Ibuprofen 400mg / Brufen 400mg | same ingredient, branded vs generic |
+| Amoxicillin (Mox) | prescription-only → pharmacist verification before confirm |
+| Tramadol, Albendazole | in the catalogue, **stocked nowhere** → out-of-stock and lost-sale paths |
+| Sildenafil, Azithromycin | only a handful of units network-wide → competing customers |
+| Alendronate-style scarce rows | one pharmacy has 2 units, peers have none → borrow + ledger |
 
 Pharmacies 1–7 are verified; pharmacy 8 and rider 4 are **pending** (to demo admin verification).
 All seeded pharmacies carry a valid-looking drug licence (`KA-BLR-20B-000n`) and riders a verified

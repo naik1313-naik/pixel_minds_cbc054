@@ -248,7 +248,11 @@ export async function seedDatabase(): Promise<void> {
   const catalogueIds = new Map<string, number>();
   let nextCatalogueId = 1;
   for (const m of MEDICINES) {
-    const displayName = m.brand ? `${m.brand}` : `${m.generic} ${strengthLabel(m)}`.trim();
+    // A brand alone is not enough to identify a medicine on screen: "Mox" and
+    // "Azithral" say nothing about what they are. The generic and strength go in
+    // parentheses so the display name is unambiguous without opening a detail.
+    const genericLabel = `${m.generic} ${strengthLabel(m)}`.trim();
+    const displayName = m.brand ? `${m.brand} (${genericLabel})` : genericLabel;
     const aliases = [
       m.generic,
       ...(m.ingredients ?? []),
