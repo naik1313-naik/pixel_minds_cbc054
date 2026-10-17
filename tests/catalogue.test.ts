@@ -34,7 +34,7 @@ describe("the catalogue as authored", () => {
     // The two fields where a plausible-looking fabrication would be acted on.
     // There is no barcode field in the authored data at all, which is the point.
     for (const e of CATALOGUE) {
-      expect((e as Record<string, unknown>).barcode).toBeUndefined();
+      expect((e as unknown as Record<string, unknown>).barcode).toBeUndefined();
     }
   });
 

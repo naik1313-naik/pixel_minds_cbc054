@@ -144,6 +144,22 @@ export function fuzzyEquals(term: string, candidate: string): boolean {
 }
 
 /**
+ * Presentation for a matched alias.
+ *
+ * Catalogue aliases are stored lowercase so they compare reliably. Echoing that
+ * back to a user reads as a typo on our side rather than theirs, so a
+ * single-word alias is capitalised for display only — the stored value is
+ * untouched.
+ */
+function tidyLabel(raw: string): string {
+  const t = raw.trim();
+  if (!t.includes(" ") && t === t.toLowerCase()) {
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+  return t;
+}
+
+/**
  * True when a query fragment names a catalogue word.
  *
  * Prefix matching is included because people type fragments, not whole words:
@@ -278,7 +294,7 @@ export function scoreMedicine(m: Medicine, input: ScoreInput): ScoredMedicine | 
   if (synonymHit) {
     score += SEARCH_WEIGHTS.synonym;
     const original = (m.synonyms ?? "").split(",").find((s) => normalize(s) === synonymHit);
-    reasons.push(original ? `known name: ${original.trim()}` : "known alternative name");
+    reasons.push(original ? `known name: ${tidyLabel(original)}` : "known alternative name");
   }
 
   // 3. Generic / salt. The strongest signal after the name, and how "ORS" or
