@@ -112,8 +112,12 @@ const step = (n, label) => console.log(`\n${n}. ${label}`);
   const newRiderId = r.json?.user?.id;
   const partnerStatus = r.json?.user?.partner_status;
   check(
-    partnerStatus === "verified",
-    "rider is auto-approved at registration (no admin gate)",
+    partnerStatus === "pending",
+    // Previously this asserted the opposite: that a rider was approved the
+    // instant they registered. A rider is handed the customer's address, the
+    // medicine and the handover OTP, so approval is now an admin decision and
+    // this check exists to stop that regressing.
+    "a new rider waits for an admin instead of being approved on signup",
     String(partnerStatus)
   );
 
