@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MediMesh AI</title>
+<style>
+  /* One slide per render. Rendered at 1920x1080 and screenshotted, so the layout
+     is fixed-size on purpose — no responsive rules, nothing that could reflow
+     mid-capture. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+    background: radial-gradient(1200px 700px at 15% 0%, #0f3b39 0%, #06201f 45%, #031312 100%);
+    color: #e8f3f1;
+    -webkit-font-smoothing: antialiased;
+  }
+  .slide {
+    position: relative; width: 1920px; height: 1080px;
+    padding: 110px 130px 150px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .kicker { font-size: 26px; letter-spacing: .22em; text-transform: uppercase; color: #4fd1c5; font-weight: 700; }
+  h1 { font-size: 108px; line-height: 1.02; font-weight: 800; margin-top: 26px; letter-spacing: -0.03em; }
+  h2 { font-size: 74px; line-height: 1.06; font-weight: 800; margin-top: 22px; letter-spacing: -0.025em; }
+  .sub { font-size: 34px; line-height: 1.45; color: #a9c9c5; margin-top: 26px; max-width: 1350px; }
+  .accent { color: #4fd1c5; }
+  .warn { color: #fbbf6e; }
+  .rule { height: 3px; background: linear-gradient(90deg, #4fd1c5, transparent); margin: 40px 0; }
+
+  .cards { display: grid; gap: 26px; margin-top: 44px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .cols-5 { grid-template-columns: repeat(5, 1fr); }
+  .card { background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.11); border-radius: 22px; padding: 30px 32px; }
+  .card h3 { font-size: 30px; font-weight: 700; margin-bottom: 12px; }
+  .card p { font-size: 23px; line-height: 1.45; color: #a9c9c5; }
+  .num { font-size: 74px; font-weight: 800; color: #4fd1c5; letter-spacing: -0.03em; }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 22px; color: #7fe3d8; }
+
+  ul { list-style: none; margin-top: 26px; }
+  li { font-size: 30px; line-height: 1.5; padding-left: 46px; position: relative; margin-bottom: 20px; color: #cfe4e1; }
+  li::before { content: "→"; position: absolute; left: 0; color: #4fd1c5; font-weight: 700; }
+  li b { color: #fff; font-weight: 700; }
+
+  code { font-family: "SF Mono", ui-monospace, Menlo, monospace; background: rgba(79,209,197,.13); color: #7fe3d8; padding: 3px 10px; border-radius: 7px; font-size: .9em; }
+
+  .footer { position: absolute; left: 130px; right: 130px; bottom: 54px; display: flex; justify-content: space-between; align-items: center; font-size: 21px; color: #5f8b87; }
+  .dots { display: flex; gap: 9px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255,255,255,.2); }
+  .dot.on { background: #4fd1c5; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 34px; }
+  th { text-align: left; font-size: 22px; text-transform: uppercase; letter-spacing: .1em; color: #5f8b87; padding: 14px 18px; border-bottom: 2px solid rgba(255,255,255,.14); font-weight: 700; }
+  td { font-size: 27px; padding: 18px; border-bottom: 1px solid rgba(255,255,255,.07); color: #cfe4e1; }
+  td.strong { color: #fff; font-weight: 700; }
+  td.yes { color: #4fd1c5; font-weight: 700; }
+  td.no { color: #8aa5a2; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const DATA = window.__DATA__ || {};
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function frame(inner, n, total) {
+  return `<div class="slide">${inner}
+    <div class="footer">
+      <span>MediMesh AI — ${esc(DATA.tagline || "free-first AI, no paid service")}</span>
+      <span class="dots">${Array.from({ length: total }, (_, i) => `<span class="dot ${i === n - 1 ? "on" : ""}"></span>`).join("")}</span>
+      <span>${n} / ${total}</span>
+    </div></div>`;
+}
+
+const SLIDES = [
+  // 1 — title
+  () => `<div class="kicker">MediMesh</div>
+    <h1>The AI is real,<br>and it is <span class="accent">ours</span>.</h1>
+    <div class="sub">No API key. No paid provider. No network call. Five features that run on your laptop, offline, with every decision explained.</div>
+    <div class="rule"></div>
+    <div class="cards cols-3">
+      <div class="card"><div class="num">${DATA.medicines}</div><p>catalogue entries</p></div>
+      <div class="card"><div class="num">${DATA.categories}</div><p>categories</p></div>
+      <div class="card"><div class="num">${DATA.tests}</div><p>automated tests</p></div>
+    </div>`,
+
+  // 2 — the honest bit first
+  () => `<div class="kicker">Start with the hard part</div>
+    <h2>What "AI" means here</h2>
+    <div class="cards cols-3">
+      <div class="card"><h3 class="accent">It is algorithms</h3><p>Bounded edit distance, weighted scoring, moving averages, Haversine distance. Ordinary arithmetic you could check by hand.</p></div>
+      <div class="card"><h3 class="accent">It is reproducible</h3><p>Same input, same output, every time. No temperature, no sampling, no "the model was feeling creative".</p></div>
+      <div class="card"><h3 class="accent">It explains itself</h3><p>Every result carries the reason it surfaced. If it cannot say why, it does not say it.</p></div>
+    </div>
+    <div class="sub" style="margin-top:44px">If a feature needs a paid service to work, the demo stops working. So there are none.</div>`,
+
+  // 3 — A: search
+  () => `<div class="kicker">Feature A</div>
+    <h2>Search that explains itself</h2>
+    <ul>
+      <li><b>Normalisation</b> — case, punctuation, accents, every dash variant, full-width digits. Type <code>Ｄｏｌｏ</code> and it still finds Dolo.</li>
+      <li><b>Bounded Damerau-Levenshtein</b> — plain Levenshtein charges two edits for <code>teh → the</code>, so ordinary typos fall outside tolerance. The budget scales with word length: a three-letter query forgives nothing.</li>
+      <li><b>Transparent weights</b>, in one exported object you can read and argue with.</li>
+    </ul>
+    <div class="cards cols-2" style="margin-top:20px">
+      <div class="card"><h3>Typed this</h3><p class="mono">show nearby pharmacies with<br>paracetamol in stock within 3 km</p></div>
+      <div class="card"><h3 class="accent">It understood</h3><p>${DATA.understood}</p></div>
+    </div>`,
+
+  // 4 — the four rules
+  () => `<div class="kicker">Feature A — the rules it enforces</div>
+    <h2>Four things the search will not do</h2>
+    <div class="cards cols-2">
+      <div class="card"><h3>1. Availability is read, never inferred</h3><p>If the inventory row does not say so, the pharmacy is not listed as having it.</p></div>
+      <div class="card"><h3>2. Prescription status is reported, never scored</h3><p>Ranking an Rx option differently because it needs a prescription would walk a patient towards a worse outcome for a clinical reason.</p></div>
+      <div class="card"><h3>3. Strengths are never merged</h3><p>A 400mg tablet is not a 650mg tablet. Different strengths go in a separate bucket with the difference spelled out.</p></div>
+      <div class="card"><h3>4. "Nearby" without a number filters nothing</h3><p>Inventing a radius produces a list that looks tailored and is not.</p></div>
+    </div>`,
+
+  // 5 — B: forecasting
+  () => `<div class="kicker">Feature B</div>
+    <h2>Stock forecasting from recorded history</h2>
+    <div class="cards cols-2">
+      <div class="card"><h3>What it uses</h3><p>Actual recorded movement: every dispense, every reservation, every expiry — timestamped. Nothing is back-filled to make a forecast look good.</p></div>
+      <div class="card"><h3>What it computes</h3><p>Moving average and exponentially weighted moving average over the observed window, then days of cover at the observed rate.</p></div>
+      <div class="card"><h3>When there is not enough data</h3><p class="warn">It says so, and falls back to a labelled heuristic. A confident number from thin data is worse than an honest "not enough history yet".</p></div>
+      <div class="card"><h3>Every number is traceable</h3><p>Data sufficiency, horizon, assumptions and uncertainty are shown next to the recommendation, not hidden behind it.</p></div>
+    </div>`,
+
+  // 6 — C: rider assignment
+  () => `<div class="kicker">Feature C</div>
+    <h2>Rider assignment, with the reasoning attached</h2>
+    <ul>
+      <li><b>Haversine distance</b>, then a clearly labelled road-distance multiplier — no paid routing API.</li>
+      <li><b>Eligibility is a filter, not a score.</b> Offline, free, under capacity, not already holding the job. A rider who fails any of these is not ranked at all — a high score cannot buy past a hard constraint.</li>
+      <li><b>The runners-up are returned too</b>, with their scores, so the recommendation can be argued with.</li>
+      <li><b>An override is possible</b> by authorised staff, and is written to the audit log with who and why.</li>
+    </ul>
+    <div class="sub" style="margin-top:34px">A recommendation is not an assignment until the database commits it — and the write is guarded so two concurrent requests cannot both claim the same rider.</div>`,
+
+  // 7 — D: assistant
+  () => `<div class="kicker">Feature D</div>
+    <h2>The assistant has a hard boundary</h2>
+    <div class="cards cols-2">
+      <div class="card"><h3 class="accent">What it does</h3><p>Routes intent to your own authorised services: nearby stock, your order's status, how tracking works, what needs restocking.</p></div>
+      <div class="card"><h3 class="warn">What it must never do</h3><p>Diagnose. Prescribe. Recommend a dose. Call two medicines interchangeable. Those need a pharmacist, and it will say so.</p></div>
+    </div>
+    <ul style="margin-top:40px">
+      <li>It uses <b>your role and permissions</b> — you can never ask it about somebody else's order.</li>
+      <li><b>No API key required.</b> An external provider is an optional adapter that falls back to local handlers when absent.</li>
+      <li><b>No personal data leaves the machine</b>, ever, by default.</li>
+    </ul>`,
+
+  // 8 — E: heatmap
+  () => `<div class="kicker">Feature E</div>
+    <h2>Demand heatmap from stored observations only</h2>
+    <div class="cards cols-2">
+      <div class="card"><h3>Counted, not modelled</h3><p>Aggregated from fulfilled orders that actually exist in the database. Observed demand and forecast demand are drawn differently, and labelled differently.</p></div>
+      <div class="card"><h3>Classified from its own thresholds</h3><p>Low / medium / high are derived from the available data, shown alongside the number of observations — so a single busy day cannot masquerade as a trend.</p></div>
+    </div>
+    <div class="sub" style="margin-top:36px">Every cell can say why it is classified the way it is. And because this is fictional demo data, it says that too.</div>`,
+
+  // 9 — catalogue as substrate
+  () => `<div class="kicker">What the AI stands on</div>
+    <h2>A catalogue that will not lie for you</h2>
+    <table>
+      <tr><th>Field</th><th>What it holds</th><th>Why</th></tr>
+      <tr><td class="strong">Medicines</td><td class="strong">${DATA.medicines} entries · ${DATA.categories} categories</td><td>Real, widely-known products</td></tr>
+      <tr><td class="strong">Manufacturer, barcode</td><td class="strong">NULL where unknown</td><td>A plausible-looking fabrication gets acted on</td></tr>
+      <tr><td class="strong">Prescription flag</td><td class="strong">${DATA.rx} flagged · basis shown</td><td>Curated, never guessed, never by a model</td></tr>
+      <tr><td class="strong">Price</td><td class="strong">fictional</td><td>No real price is claimed anywhere</td></tr>
+      <tr><td class="strong">Availability</td><td class="strong">live inventory only</td><td>A catalogue entry existing is not a stock claim</td></tr>
+    </table>
+    <div class="sub" style="margin-top:26px">${DATA.demoRows} rows are marked <code>demo</code> and labelled as such. The rest are real products — this is not every medicine in the world, and it does not pretend to be.</div>`,
+
+  // 10 — honesty table
+  () => `<div class="kicker">The part that matters</div>
+    <h2>What this system will not claim</h2>
+    <table>
+      <tr><th>It does not</th><th>Because</th></tr>
+      <tr><td class="no">Diagnose or prescribe</td><td>That is a pharmacist's job, not a ranking function's</td></tr>
+      <tr><td class="no">Substitute a strength or a formulation</td><td>Alternatives are shown separately, with the difference named</td></tr>
+      <tr><td class="no">Treat on-chain records as payment proof</td><td>The ledger proves a report was filed, not that money moved</td></tr>
+      <tr><td class="no">Show availability it cannot see</td><td>If the inventory row does not say so, it is not available</td></tr>
+      <tr><td class="no">Invent clinical facts</td><td>No indications, dosages or contraindications are generated anywhere</td></tr>
+    </table>`,
+
+  // 11 — under the hood
+  () => `<div class="kicker">Under the hood</div>
+    <h2>The stack, and why</h2>
+    <div class="cards cols-3">
+      <div class="card"><h3>Next.js + PostgreSQL</h3><p>One process. Real transactions, which is what makes reserving stock without overselling it possible.</p></div>
+      <div class="card"><h3>Local algorithms</h3><p>Typed, tested, inspectable. The scoring weights are an exported object, not a black box.</p></div>
+      <div class="card"><h3>Blockchain as audit anchor</h3><p>Append-only, role-checked, replay-guarded — and described as what it is.</p></div>
+    </div>
+    <ul style="margin-top:44px">
+      <li>${DATA.tests} automated tests · ${DATA.contractTests} contract tests · ${DATA.e2e} browser tests</li>
+      <li>Zero paid services required to run the demo, start to finish</li>
+      <li>Every algorithm in this video is in the repository, with tests</li>
+    </ul>`,
+
+  // 12 — close
+  () => `<div class="kicker">MediMesh</div>
+    <h1>Free, offline,<br>and <span class="accent">honest</span> about both.</h1>
+    <div class="sub">Try it: <code>npm install && npm run db:reset && npm run dev</code><br>Then <code>npm run chain:node</code> and <code>npm run chain:deploy</code> for the audit layer.</div>
+    <div class="rule"></div>
+    <div class="sub">Built as a demonstration. Fictional pharmacies, fictional prices, fictional patients. The medicines are real; the rest is honest about not being.</div>`,
+];
+
+const n = Number(new URLSearchParams(location.search).get("slide") || 1);
+document.getElementById("root").innerHTML = frame(SLIDES[n - 1](), n, SLIDES.length);
+</script>
+</body>
+</html>
