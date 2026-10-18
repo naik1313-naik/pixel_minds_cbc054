@@ -703,7 +703,10 @@ export async function listPharmacyPayments(pharmacyId: number, limit = 50) {
   >(
     `SELECT p.*, m.name AS medicine_name, pa.settlement_ref, pa.block_number
        FROM payments p
-       LEFT JOIN payment_audit pa ON pa.payment_id = p.id
+       -- kind = 'pharmacy': a payment carries two anchors now (the pharmacy's
+       -- settlement and the rider's delivery fee), and joining both duplicates
+       -- every row in the pharmacy's payout history.
+       LEFT JOIN payment_audit pa ON pa.payment_id = p.id AND pa.kind = 'pharmacy'
        LEFT JOIN medicines m ON m.id = (SELECT medicine_id FROM requests WHERE id = p.request_id)
       WHERE p.pharmacy_id = $1
       ORDER BY p.id DESC LIMIT $2`,

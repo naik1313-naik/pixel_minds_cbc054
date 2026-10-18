@@ -51,7 +51,11 @@ export const GET = guard(["admin"], async () => {
       LEFT JOIN deliveries d ON d.request_id = r.id
       LEFT JOIN users u      ON u.id = d.partner_id
       LEFT JOIN payments pay ON pay.request_id = r.id
-      LEFT JOIN payment_audit pa ON pa.payment_id = pay.id
+      -- Scoped to the pharmacy anchor. A payment now has two audit rows — the
+      -- pharmacy's settlement and the rider's fee — so an unqualified join
+      -- multiplies every order by two and the operator sees the same order
+      -- twice.
+      LEFT JOIN payment_audit pa ON pa.payment_id = pay.id AND pa.kind = 'pharmacy'
       ORDER BY r.id DESC
       LIMIT 300`
   );

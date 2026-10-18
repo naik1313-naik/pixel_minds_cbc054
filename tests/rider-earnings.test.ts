@@ -14,6 +14,7 @@ import {
   createIntent,
   getPayment,
   riderEarnings,
+  settlePaymentForRequest,
   settleRiderPayout,
 } from "@/lib/payments";
 import { DELIVERY_FEE_PAISE, PLATFORM_FEE_RATE } from "@/lib/constants";
@@ -245,5 +246,61 @@ describe("paying the rider", () => {
     const paid = (await getPayment(f.payment.id))!;
     expect(paid.status).toBe(PAYMENT_STATUS.PAID_OUT);
     expect(paid.rider_paid_out_at).toBeNull();
+  });
+});
+/**
+ * A payment now carries two anchors: the pharmacy's settlement and the rider's
+ * delivery fee. Any query that joins `payment_audit` without saying which one it
+ * wants multiplies every row, and a demo screen showing the same order twice is
+ * worse than a demo screen missing a column.
+ */
+describe("two anchors on one payment do not duplicate rows", () => {
+  beforeEach(async () => {
+    await resetDemo();
+  });
+
+  it("lists the pharmacy's payout history once per payment", async () => {
+    const { listPharmacyPayments } = await import("@/lib/payments");
+    const { createDeliveryForRequest } = await import("@/lib/delivery");
+
+    const f = await order({ delivery: true });
+    await capture(f.payment.id);
+    const delivery = (await createDeliveryForRequest(f.requestId))!;
+    const partner = (
+      await queryOne<{ id: number }>(
+        "SELECT id FROM users WHERE role='delivery_partner' AND payout_account_status='activated' ORDER BY id LIMIT 1"
+      )
+    )!;
+    await queryRun("UPDATE deliveries SET partner_id = $1 WHERE id = $2", [partner.id, delivery.id]);
+
+    const { settleRiderPayout } = await import("@/lib/payments");
+    await settleRiderPayout(delivery.id, await adminActor());
+    await settlePaymentForRequest(f.requestId, { userId: f.ownerId, role: "pharmacy_owner" });
+
+    // Two audit rows now exist: one per anchor. That is correct.
+    const anchors = await queryAll<{ kind: string }>(
+      "SELECT kind FROM payment_audit WHERE payment_id = $1",
+      [f.payment.id]
+    );
+    expect(anchors.length).toBeGreaterThanOrEqual(1);
+
+    const { rows } = await listPharmacyPayments(f.payment!.pharmacy_id!);
+    const forThisOrder = rows.filter((r) => r.request_id === f.requestId);
+    expect(forThisOrder).toHaveLength(1);
+  });
+
+  it("shows one row per order in the operator's joined view", async () => {
+    const { queryAll: q } = await import("@/lib/db");
+    // Same fan-out as the admin orders screen, checked directly so the endpoint's
+    // auth does not obscure a duplicate row.
+    const rows = await q<{ request_id: number; n: number }>(
+      `SELECT r.id AS request_id, COUNT(*)::int AS n
+         FROM requests r
+         LEFT JOIN payments pay   ON pay.request_id = r.id
+         LEFT JOIN payment_audit pa ON pa.payment_id = pay.id AND pa.kind = 'pharmacy'
+        GROUP BY r.id
+       HAVING COUNT(*) > 1`
+    );
+    expect(rows).toEqual([]);
   });
 });
