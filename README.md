@@ -633,6 +633,95 @@ Four rules the implementation exists to enforce:
 
 ---
 
+## AI health assistant (`/assistant`)
+
+Sign in as any persona and open **AI assistant** in the navigation, or go straight to
+`http://localhost:3000/assistant`. It needs a session — there is no anonymous mode, because it
+reads your own orders.
+
+### What it actually does
+
+| | |
+|---|---|
+| **Emergency screening first** | Deterministic, runs before any question, matches on *presence* of a warning sign — never concludes safety from the absence of one. Severe breathing difficulty, stroke signs, crushing chest pain, unconsciousness, severe bleeding or overdose, seizures or anaphylaxis, a rash that does not fade, and self-harm all route to "call **112** now" |
+| **Asks before it answers** | Duration, severity, red-flag questions, and age only where it changes the answer. Never asks for a name, address, or document number |
+| **General information** | What a symptom is *commonly associated with*, general comfort measures, and what to watch for. Explicitly not a diagnosis, and explicitly not "harmless" |
+| **Catalogue lookup** | "Is there Dolo 650 in stock nearby?" searches the real catalogue and the real inventory, and separates exact matches from other strengths or forms |
+| **App help** | Your own orders, tracking, and how the pharmacy and rider consoles work — answered from your session, never another user's |
+
+### The boundary, and why it is not negotiable
+
+The assistant **does not diagnose, prescribe, dose, or tell anyone to stop a treatment**, and
+every health answer ends with a referral. That is structural, not editorial: `lib/triage.ts`
+produces the text, `FORBIDDEN_OUTPUT` plus `findUnhedgedClaim` are asserted in tests, and the UI
+cannot render a health answer without the notice.
+
+The reasons are not stylistic:
+
+- **The catalogue is curated, not regulatory.** Prescription flags carry `rx_basis = 'curated'`,
+  manufacturers and barcodes are unknown, prices are invented. Recommending from it means
+  recommending from data that says in its own schema that it is unverified.
+- **The system cannot know what a diagnosis needs** — kidney and liver function, allergies,
+  pregnancy, age-adjusted dosing, drug interactions. No amount of prompting supplies those.
+- **A diagnosis is made by someone who can examine you.** A confident wrong answer in a chat
+  bubble is the worst outcome this product could produce, and it would look exactly as helpful as
+  a right one.
+
+`findUnhedgedClaim` exists because a naive rule failed first: it fired on this module's own
+sentence "this is **not** a diagnosis of what you have". A safety check that trips on its own
+disclaimer has quietly stopped checking anything, so the check is sentence-level and
+negation-aware, and there is a test for exactly that failure.
+
+### Local mode, and the optional provider
+
+Local mode is the default and the product: a deterministic intent router plus the triage module.
+It needs **no API key, no network and no account**, and works entirely offline.
+
+An optional provider can reword an answer. It is server-side only, and it is not trusted:
+
+```bash
+MM_ASSISTANT_PROVIDER_URL=https://your-endpoint/v1/chat/completions
+MM_ASSISTANT_PROVIDER_KEY=...          # server-side only; never NEXT_PUBLIC_
+MM_ASSISTANT_PROVIDER_MODEL=...
+MM_ASSISTANT_PROVIDER_TIMEOUT_MS=8000  # capped at 30s
+```
+
+What the provider is **not allowed** to do — enforced in `validateProviderOutput`, not by
+convention:
+
+- decide whether this is an emergency (that screen is deterministic and runs first);
+- name a medicine, a dose or a duration;
+- introduce anything not already in the local answer;
+- invent an emergency number — only 112 may appear, and only when the local answer had it;
+- drop the instruction to consult a professional.
+
+Any failure — unconfigured, unreachable, timed out, rejected output — falls back to the local
+answer unchanged. The UI shows which answered, and a provider problem never reaches the user as
+an error. **To disable it entirely: unset those variables.**
+
+### Privacy
+
+- **Nothing identifying is sent anywhere.** `redactForProvider` strips emails, phone numbers,
+  Aadhaar-shaped blocks, postcodes, addresses and capitalised names before any outbound request.
+- **Nothing is persisted.** The conversation lives in `sessionStorage` in your own browser and
+  is sent only when you press send. **Clear conversation** removes it.
+- **No cross-user access is possible**, because no handler accepts a user id — the actor comes
+  from the session.
+- **Logs hold metadata only** (`intent`, `responseType`, `answeredBy`, role). Symptom text is
+  never written to the audit log; it is health information nobody asked us to record.
+- **Demo limitation:** this is a prototype with no clinical governance, no encryption at rest for
+  transcripts, and no retention policy beyond "the browser tab". Do not put real patient data in.
+
+### Limits and commands
+
+```bash
+npm run db:reset                          # reset, then clear /api/assistant rate-limit rows
+npm run chat:a                            # scripted end-to-end conversation check
+```
+
+Chat is rate limited to 12 messages per minute per IP, returns `429` with `retryAfterSeconds`, and
+accepts at most 1000 characters per message with a 20-message transcript window.
+
 ## Seed highlights (for the demo)
 
 | Medicine | Why it matters |

@@ -46,7 +46,9 @@ export interface Pharmacy {
 }
 export interface Medicine {
   id: number;
+  /** Legacy display name, kept in step with `display_name`. */
   name: string;
+  /** Legacy generic column, kept in step with `generic_name`. */
   salt: string;
   price_paise: number;
   rx_required: number;
@@ -54,6 +56,24 @@ export interface Medicine {
   category: string | null;
   strength: string | null;
   dosage_form: string | null;
+
+  // Catalogue columns. The legacy ones above are maintained from these, so the
+  // two views cannot drift apart.
+  display_name: string | null;
+  generic_name: string | null;
+  brand_name: string | null;
+  ingredients: string | null;
+  strength_value: number | null;
+  strength_unit: string | null;
+  route: string | null;
+  subcategory: string | null;
+  therapeutic_class: string | null;
+  manufacturer: string | null;
+  requires_prescription: number;
+  rx_basis: string | null;
+  verification_status: string;
+  package_size: string | null;
+  is_active: number;
 }
 
 const LOCK_DEFAULT_SECONDS = 1800; // 30 minutes

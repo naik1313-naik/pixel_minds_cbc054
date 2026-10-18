@@ -6,19 +6,26 @@ import LogoutButton from "./LogoutButton";
 const LINKS: Record<string, { href: string; label: string }[]> = {
   customer: [
     { href: "/app", label: "Find medicine" },
+    { href: "/assistant", label: "AI assistant" },
     { href: "/insights", label: "Network insights" },
   ],
   pharmacy_owner: [
     { href: "/pharmacy", label: "Pharmacy console" },
+    { href: "/assistant", label: "AI assistant" },
     { href: "/insights", label: "Network insights" },
   ],
   pharmacy_staff: [
     { href: "/pharmacy", label: "Pharmacy console" },
+    { href: "/assistant", label: "AI assistant" },
     { href: "/insights", label: "Network insights" },
   ],
-  delivery_partner: [{ href: "/rider", label: "Delivery app" }],
+  delivery_partner: [
+    { href: "/rider", label: "Delivery app" },
+    { href: "/assistant", label: "AI assistant" },
+  ],
   admin: [
     { href: "/admin", label: "Admin" },
+    { href: "/assistant", label: "AI assistant" },
     { href: "/insights", label: "Network insights" },
   ],
 };

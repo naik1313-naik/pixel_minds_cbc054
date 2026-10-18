@@ -34,7 +34,10 @@
     "smoke:delivery-assign": "node scripts/demo-delivery-flow.mjs",
     "audit:rider": "node scripts/rider-role-audit.mjs",
     "screenshots": "node scripts/screenshots.mjs",
-    "smoke:delivery": "node scripts/smoke-delivery-audit.mjs"
+    "smoke:delivery": "node scripts/smoke-delivery-audit.mjs",
+    "video:ai": "node scripts/ai-video/build-ai-video.mjs",
+    "video:demo": "node scripts/record-app-demo.mjs",
+    "chat:a": "node scripts/check-assistant.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",

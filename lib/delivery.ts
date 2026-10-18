@@ -617,15 +617,24 @@ export async function verifyHandover(input: {
   // last moment at which expired stock can still be refused, so it is the moment
   // that has to check it. The rider is told plainly, because they are holding
   // the box and need to know to take it back.
-  const stock = await queryOne<{ expiry_date: string | null; medicine_name: string }>(
-    `SELECT i.expiry_date, m.name AS medicine_name
+  // "Today" is read from the database, not from `new Date()` in the Node process.
+  // Expiry dates are written and compared as plain dates, and the database's clock
+  // is the one that produced them: a server running in UTC is a day behind a
+  // database in IST after 18:30 UTC, which made stock expiring "today" pass the
+  // check for a whole evening.
+  const stock = await queryOne<{
+    expiry_date: string | null;
+    medicine_name: string;
+    today: string;
+  }>(
+    `SELECT i.expiry_date, m.name AS medicine_name, CURRENT_DATE::text AS today
        FROM requests r
        JOIN inventory i ON i.pharmacy_id = $1 AND i.medicine_id = r.medicine_id
        JOIN medicines m ON m.id = r.medicine_id
       WHERE r.id = $2`,
     [d.pharmacy_id, d.request_id]
   );
-  if (stock?.expiry_date && stock.expiry_date < new Date().toISOString().slice(0, 10)) {
+  if (stock?.expiry_date && stock.expiry_date < stock.today) {
     await recordAudit({
       actorUserId: input.userId,
       actorRole: "delivery_partner",
