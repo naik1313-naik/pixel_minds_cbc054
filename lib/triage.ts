@@ -612,7 +612,14 @@ export const FORBIDDEN_OUTPUT = [
   // Claiming, never disclaiming. A bare /diagnos(is|ed)/ matched this module's own
   // "this is not a diagnosis" line, which is how a safety rule quietly stops
   // catching anything.
-  /\byou (?:have|are suffering from|are showing)\b/i,
+  // Broad, minus the continuations that are not naming a condition. A narrower
+  // rule ("you have a/an/severe ...") was tried and is wrong: "you have dengue"
+  // carries no determiner and is exactly the claim that must be caught.
+  //
+  // What follows "you have" decides whether a condition was named. "you have
+  // already stopped something" is advice *against* stopping treatment and names
+  // nothing; "you have dengue" names a condition.
+  /\byou (?:have|are suffering from|are showing)\s+(?!(?:already|not|never|no|nothing|any|been|had|since|stopped|started|taken|been told|questions?|symptoms? to|a word|a problem asking)\b)[\w-]+/i,
   /\b(?:your|the) diagnosis (?:is|was)\b/i,
   /\bdiagnosed (?:with|as)\b/i,
   /\b(?:this|it|that) is (?:definitely|clearly|certainly) \b/i,

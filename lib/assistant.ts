@@ -35,6 +35,7 @@ export type IntentKind =
   | "order_status"
   | "stock_lookup"
   | "tracking_help"
+  | "prescription_help"
   | "dashboard_help"
   | "assignment_help"
   | "restock_help"
@@ -65,7 +66,7 @@ export interface AssistantReply {
   intent: IntentKind;
   message: string;
   /** How the UI should present this. Mirrors the API's responseType. */
-  responseType: "general-information" | "health-information" | "pharmacy-search" | "emergency-guidance" | "clarifying-question";
+  responseType: "general-information" | "health-information" | "pharmacy-search" | "emergency-guidance" | "clarifying-question" | "medical-refusal";
   /** Catalogue rows the backend verified. Never invented. */
   catalogue?: CatalogueResult[];
   /** Safety notice text, when one applies. */
@@ -123,6 +124,94 @@ function continuesHealthConversation(message: string, history: string[]): boolea
   return looksMedical(history.join(" "));
 }
 
+const REFUSALS: { pattern: RegExp; reply: string }[] = [
+  {
+    // Checked before "which medicine", because "which medicine for my fever" is
+    // both, and the dose reading is the more dangerous of the two.
+    // "what dose", "how many mg", "kitna capsule khana hai", "how much syrup for
+    // a child" — the request is the pairing of a quantity word with a medicine
+    // form, so both halves are required. Requiring the pair is what stops this
+    // firing on "how long does a fever last".
+    pattern:
+      /\b(how (?:much|many)|what dose|dose of|dosage|kitna|kitne|kitni)\b[^.?!]{0,40}\b(mg|ml|mcg|tablet|tablets|strip|capsule|capsules|syrup|drops|dawai|medicine)|\b(how much|kitna|kitne|kitni)\b[^.?!]{0,30}\b(take|khana|khane|leni|lo)\b/i,
+    reply:
+      "I am not going to give you a dose. The right amount depends on your age, weight, kidney and liver " +
+      "function, other medicines you take, and whether you are pregnant — none of which I can see, and none " +
+      "of which you should be estimating. Please consult a doctor or pharmacist, or read the pack, which " +
+      "states the dose for this product.",
+  },
+  {
+    // "stop taking my tablets", "should I stop antibiotics", "band kar do meri dawai".
+    // The medicine noun is required in both alternatives; only the filler words
+    // between the action and the noun are optional, because that is the part
+    // people word differently ("stop taking my" / "stop my" / "stop").
+    pattern:
+      /\b(stop|discontinue|skip|quit|band|karo|chhod|chod)\b[^.?!]{0,30}\b(medicine|medication|tablet|tablets|pill|pills|antibiotic|antibiotics|treatment|syrup|drops|dawai|medicines)\b|\b(stop|discontinue|skip|quit)\s+(taking|taking my|taking your)\b/i,
+    reply:
+      "Please do not stop a medicine on the basis of anything I say. Whether something can be stopped — and " +
+      "when — depends on why it was prescribed: some are stopped in steps, and stopping some abruptly can be " +
+      "worse than the original problem. Please consult the doctor or pharmacist who prescribed it, or " +
+      "whoever is treating you, and let them decide. If you have already stopped something, tell them when " +
+      "you last took it.",
+  },
+  {
+    pattern: /\b(?:is|are) (?:this|it|that|my \w+)\s+(?:harmless|just a cold|not serious|fine|okay|ok|normal)\b|\bnothing to worry about\b|\bwill (?:it|i) (?:be )?(?:ok|fine|okay|safe)\b|\bdon'?t worry\b/i,
+    reply:
+      "I cannot tell you that. Saying a symptom is harmless is exactly the answer that would be costly to get " +
+      "wrong, and I cannot rule in or rule out anything from a message. Some things that feel routine turn " +
+      "out not to be. If it is not getting better, or if you are worried — reasonably — please consult a doctor " +
+      "or pharmacist about it rather than deciding here that it is nothing.",
+  },
+  {
+    pattern: /\b(what|which) (?:disease|condition|infection|illness)\b|\bdiagnos(?:e|is)\b|\bkya (?:bimari|hoga|bimari) (?:hai|ka)\b|\bwhich disease\b/i,
+    reply:
+      "I cannot tell you what condition this is, and I am not going to guess. Naming one would sound helpful " +
+      "and would tell you almost nothing, because many conditions that look alike need different treatment and " +
+      "some need tests. What I can do is describe what a symptom is commonly associated with, what " +
+      "general comfort measures are, and what should make you see a doctor urgently. That is a doctor or " +
+      "pharmacist's call, made after examining you. Please consult one.",
+  },
+  {
+    pattern: /\b(which|what) (?:medicine|drug|tablet|pill)\b[^.?!]{0,30}\b(should i (?:take|buy)|take|buy|for my|for the)\b|\b(konsi|kya) (?:dawai|tablet|goli)\b/i,
+    reply:
+      "I am not going to recommend a medicine for a symptom. It sounds helpful, but the right choice depends " +
+      "on the cause, which I cannot establish, and on your other conditions and medicines, which I cannot see. " +
+      "A pharmacist can advise on what is safe to take for symptom relief, and a doctor on what is treating " +
+      "the cause. Please consult a doctor or pharmacist. I can tell you what a symptom is commonly associated " +
+      "with and what to watch for in the meantime.",
+  },
+  {
+    // "is paracetamol safe in pregnancy", "can I take this while breastfeeding",
+    // "is it safe for my baby". Both word orders are accepted — in English the
+    // safety word usually comes first ("is X safe..."), and in Hindi it usually
+    // comes last, so a single fixed order silently misses half the phrasings.
+    // "pregnan\w*" rather than "pregnan": "pregnancy" and "pregnant" share a
+    // prefix but not a word boundary, and a trailing \b there silently matched
+    // neither.
+    pattern:
+      /\b(safe|ok|okay|allowed|fine)\b[^.?!]{0,40}\b(pregnan\w*|breastfeed\w*|breast feeding|lactat\w*|newborn|infant\w*|baby|babies|my child|children|kid)\b|\b(pregnan\w*|breastfeed\w*|breast feeding|lactat\w*|newborn|infant\w*|baby|my child|children)\b[^.?!]{0,40}\b(safe|ok|okay|allowed|can i (?:take|use)|take)\b/i,
+    reply:
+      "I cannot answer that. Safety in pregnancy, while breastfeeding, and in children is decided on the " +
+      "specific medicine and the specific situation, and it is not something to take from a chat. Please consult " +
+      "your doctor or pharmacist directly — they can check the actual product, and they can see your history.",
+  },
+];
+
+/**
+ * Detects a request the assistant will refuse, and returns why in plain words.
+ *
+ * Order matters: the most dangerous reading is checked first, so "how many mg
+ * should I take" is refused as a dose question rather than as a medicine
+ * question. Returns null when nothing matched — this function never refuses
+ * something it did not actually recognise.
+ */
+function detectBoundaryRequest(message: string): string | null {
+  for (const { pattern, reply } of REFUSALS) {
+    if (pattern.test(message)) return reply;
+  }
+  return null;
+}
+
 /**
  * Routes one message.
  *
@@ -161,7 +250,30 @@ export async function route(
     });
   }
 
-  // ---------------------------------------------------------------- 2. health
+  // ---------------------------------------------------------------- 2. refusal
+  //
+  // A direct request for something we will never do gets a real answer saying
+  // why, not "I did not follow that". Someone who has just been told the
+  // assistant cannot help leaves the conversation; someone told *why* it cannot
+  // help, and who to ask instead, stays in one.
+  //
+  // This sits after the emergency screen and before triage, so a refusal can
+  // never delay an escalation, and before every app intent, so no other handler
+  // can answer it by accident.
+  const refusal = detectBoundaryRequest(message);
+  if (refusal) {
+    return local({
+      intent: "medical_boundary",
+      responseType: "medical-refusal",
+      message: refusal,
+      safetyNotice:
+        "This assistant does not diagnose, prescribe, dose, or advise changing a treatment.",
+      consultADoctor: true,
+      unsure: true,
+    });
+  }
+
+  // ---------------------------------------------------------------- 3. health
   //
   // Before any other intent, so nothing else can accidentally answer a
   // medical question. Includes the continuation case, because the answer to a
@@ -234,6 +346,15 @@ export async function route(
   }
 
   // ---------------------------------------------------------------- 5. app data
+  // Checked before the order branch, because "where is my prescription" is an
+  // order question that the order branch would answer by listing deliveries.
+  if (
+    /(prescription|rx)\b/.test(text) &&
+    /(how|where|check|status|upload|add|send|pending|apply|approve)/.test(text)
+  ) {
+    return local(prescriptionHelp(actor));
+  }
+
   if (/(order|delivery|status|kahan|where is|track)/.test(text)) return orderStatus(actor);
   if (/(stock|available|pharmacy|in stock|nearby)/.test(text)) return stockLookup();
 
@@ -317,6 +438,37 @@ async function maybeProvider(
     return { ...reply, answeredBy: "local (provider unavailable)", providerFallbackReason: result.fallbackReason };
   }
   return { ...reply, message: result.text, answeredBy: "provider" };
+}
+
+/**
+ * How the prescription flow works, and what it deliberately does not do.
+ *
+ * The prescription flag in this demo is curated — it marks a medicine as
+ * prescription-only, and that is all. It is not a licence check, and the copy
+ * says so rather than implying the system verifies anything it cannot.
+ */
+/** Wrapped in local() by the caller, like every other handler. */
+function prescriptionHelp(actor: AssistantActor): Omit<AssistantReply, "answeredBy"> {
+  const mine = actor.role === "customer";
+  return {
+    intent: "prescription_help",
+    responseType: "general-information",
+    message:
+      mine
+        ? "Prescription-only medicines are marked as you search for them, and a pharmacy cannot dispense one " +
+          "from stock until it has verified your prescription. When you request one, the order is created and " +
+          "waits for the pharmacy to approve it — you will see the status change on the order rather than the " +
+          "medicine vanishing.\n\n" +
+          "To check on it, open \"My requests\" and look at the order's status.\n\n" +
+          "One thing worth being clear about: in this demo the prescription flag is curated by hand. It marks " +
+          "what needs a prescription; it does not verify your prescription, and the products, prices and stock " +
+          "here are demo data rather than a regulated pharmacy record."
+        : "Prescription-only medicines are flagged in the catalogue, so they cannot be dispensed from stock " +
+          "until a prescription has been verified at your pharmacy. Pending approvals are in the pharmacy " +
+          "console.\n\n" +
+          "The flag itself is curated rather than regulatory in this demo — it is a prompt to check, not a " +
+          "verified record.",
+  };
 }
 
 function trackingHelp(): string {

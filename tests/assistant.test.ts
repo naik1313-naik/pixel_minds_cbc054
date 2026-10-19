@@ -138,6 +138,99 @@ describe("the health boundary", () => {
     }
   });
 
+  // Each entry is a request the assistant is expected to refuse, with a phrase
+  // that must appear in the refusal. Asserting on the *wording* matters: a
+  // refusal that quietly names a dose while explaining why it cannot give one is
+  // still a dose.
+  const REFUSALS: [string, RegExp][] = [
+    ["how many mg of paracetamol should I take?", /not going to give you a dose/i],
+    ["what dose of syrup for a child?", /not going to give you a dose/i],
+    ["kitna capsule khana hai?", /not going to give you a dose/i],
+    ["should I stop taking my tablets?", /do not stop a medicine/i],
+    ["can I stop my antibiotics?", /do not stop a medicine/i],
+    ["band kar do meri dawai", /do not stop a medicine/i],
+    ["is this harmless?", /cannot tell you that/i],
+    ["will it be fine?", /cannot tell you that/i],
+    ["I think I have dengue. Which disease is this?", /cannot tell you what condition/i],
+    ["which medicine should I buy for my fever?", /not going to recommend a medicine/i],
+    ["is paracetamol safe in pregnancy?", /cannot answer that/i],
+  ];
+
+  // The detector has to do two opposite jobs at once: catch a condition being
+  // named, and ignore sentences that merely contain "you have". A narrower rule
+  // ("you have a/an/severe ...") was tried first and silently stopped catching
+  // "you have dengue" — the exact sentence it exists to catch — because that
+  // sentence carries no determiner.
+  it("catches a named condition and ignores harmless continuations", () => {
+    for (const claim of [
+      "You have dengue fever.",
+      "It sounds like you have an infection.",
+      "You are suffering from chest pain.",
+      "You have a bad cough.",
+      "you have asthma",
+    ]) {
+      expect(findUnhedgedClaim(claim), claim).not.toBeNull();
+    }
+    for (const benign of [
+      "If you have already stopped something, tell them when you last took it.",
+      "You have not told me how long it has been going on.",
+      "If you have any questions, ask the pharmacist.",
+      "If you have no questions, that is fine.",
+    ]) {
+      expect(findUnhedgedClaim(benign), benign).toBeNull();
+    }
+  });
+
+  it("refuses what it must refuse, and says why", async () => {
+    for (const [question, expected] of REFUSALS) {
+      const r = await route(question, customer);
+      expect(r.responseType, question).toContain("medical-refusal");
+      expect(r.message, question).toMatch(expected);
+      // Note on style: the question is passed as vitest's assertion label, not
+      // interpolated into the value. `expect("x -> flag").toBe(true)` asserts
+      // that a *string* equals true, which is why an earlier version of this test
+      // passed for the wrong reason and then failed for an unrelated one.
+      expect(r.consultADoctor, question).toBe(true);
+      expect(r.message, question).toMatch(/consult/i);
+      expect(findUnhedgedClaim(r.message), question).toBeNull();
+      expect(r.catalogue ?? [], question).toEqual([]);
+    }
+  });
+
+  it("a refusal does not become the thing it refuses", async () => {
+    for (const [question] of REFUSALS) {
+      const r = await route(question, customer);
+      // The refusal text explains the risk; it must not commit the risk itself.
+      expect(r.message, `${question} — dose`).not.toMatch(/\d+\s*(mg|ml|mcg|tablets?|capsules?)\b/i);
+      expect(r.message, `${question} — stop`).not.toMatch(/\b(?:you should|please) stop\b/i);
+      expect(r.message, `${question} — reassure`).not.toMatch(
+        /\b(?:it is|it's) (?:harmless|probably fine)\b/i
+      );
+      expect(findUnhedgedClaim(r.message), `${question} — diagnose`).toBeNull();
+    }
+  });
+
+  it("refuses before it routes, but never before it screens for an emergency", async () => {
+    // An emergency buried inside a request it would otherwise refuse still has to
+    // escalate: a refusal must not become a way to miss a red flag.
+    const r = await route("I have crushing chest pain, so which medicine should I take?", customer);
+    expect(r.responseType).toBe("emergency-guidance");
+    expect(r.emergencyContact).toBe("112");
+  });
+
+  it("does not refuse ordinary questions", async () => {
+    // A refusal that fires on ordinary phrasing is worse than no refusal: it
+    // teaches people not to ask.
+    for (const [question, intent] of [
+      ["I have a fever", "symptom"],
+      ["is there Dolo 650 in stock nearby?", "medicine_availability"],
+      ["where is my order?", "order_status"],
+      ["how do I check my prescription?", "prescription_help"],
+    ] as const) {
+      expect((await route(question, customer)).intent, question).toContain(intent);
+    }
+  });
+
   it("never tells anyone to stop a treatment", () => {
     for (const s of SYMPTOMS) {
       for (const line of [...s.selfCare, ...s.possibleCauses, ...s.watchFor]) {

@@ -100,6 +100,11 @@ async function helperPool(): Promise<Pool> {
   return getPool();
 }
 
+/** The raw pool, for callers that need to hold a connection across queries. */
+async function pool(): Promise<Pool> {
+  return helperPool();
+}
+
 // Run a parameterized query and return the first row (or undefined).
 export async function queryOne<T extends QueryResultRow = QueryResultRow>(
   text: string,
@@ -204,13 +209,37 @@ export async function setSetting(key: string, value: string): Promise<void> {
   );
 }
 
-// Transactional full reset, used by the demo panel.
-//
+/**
+ * Serialises resets inside this process.
+ *
+ * A test file that times out leaves its reset query running: the timeout aborts
+ * the *awaiting*, not the statement on the server. The next `resetDemo()` then
+ * races a half-applied delete against a fresh one, and the two interleave into
+ * foreign-key violations and duplicate-key errors that look like real bugs.
+ *
+ * Chaining on a promise is enough here — it only has to stop two resets inside
+ * one Node process from overlapping, which is the whole failure.
+ */
+let resetChain: Promise<void> = Promise.resolve();
+
+export async function resetDemo(): Promise<void> {
+  const run = resetChain.then(doReset, doReset);
+  // Keep the chain alive after a failure, or one bad reset wedges every later one.
+  resetChain = run.catch(() => undefined);
+  return run;
+}
+
 // Delete order follows the foreign keys: every child row goes before its
 // parent. Postgres enforces this immediately, so an out-of-order entry here
 // fails the whole reset rather than half-clearing the database.
-export async function resetDemo(): Promise<void> {
-  await queryRaw(`
+async function doReset(): Promise<void> {
+  // One connection for BEGIN and COMMIT. Two calls on the pool can land on
+  // different connections, and a transaction on a connection nobody commits is a
+  // transaction that rolls back when it is released.
+  const client = await (await pool()).connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`
     -- Blockchain audit layer: children of deliveries / payments / batches.
     DELETE FROM delivery_audit;
     DELETE FROM payment_audit;
@@ -247,6 +276,17 @@ export async function resetDemo(): Promise<void> {
     DELETE FROM pharmacies;
     DELETE FROM settings;
   `);
+    await client.query("COMMIT");
+  } catch (err) {
+    // Without this the connection returns to the pool still holding an open
+    // transaction, and every later query on it either joins that transaction or
+    // blocks behind it.
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+
   const { seedDatabase } = await import("./seed");
   await seedDatabase();
 }
