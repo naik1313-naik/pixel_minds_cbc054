@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs";
+import nodeCrypto from "crypto";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import { dataDir } from "./paths";
 
@@ -49,6 +50,38 @@ function createPool(): Pool {
   });
 }
 
+/**
+ * Whether the schema is already at this build's version.
+ *
+ * One cheap SELECT on pg_class. The expensive alternative is what this replaced:
+ * applying all 31 `CREATE TABLE IF NOT EXISTS` and 106 index/column statements on
+ * every cold start. That is not free, and once DDL was serialised behind an
+ * advisory lock to stop the deadlock, every instance queued behind the one doing
+ * that work — which turned a correctness fix into a latency problem on exactly
+ * the page that had to feel instant.
+ *
+ * The version is a fingerprint of schema.sql, so editing the schema changes it
+ * and the next cold start applies it. An explicit override exists for the case
+ * where that is not enough.
+ */
+async function schemaIsCurrent(pool: Pool, fingerprint: string): Promise<boolean> {
+  if (process.env.MM_FORCE_SCHEMA === "1") return false;
+  try {
+    const r = await pool.query<{ v: string }>(
+      "SELECT value FROM settings WHERE key = 'schema_fingerprint'"
+    );
+    return r.rows[0]?.v === fingerprint;
+  } catch {
+    // No settings table yet, or no permission to read it. Apply the schema.
+    return false;
+  }
+}
+
+/** Stable fingerprint of the schema file, cheap enough to hash on every boot. */
+function schemaFingerprint(): string {
+  return nodeCrypto.createHash("sha256").update(fs.readFileSync(SCHEMA_PATH, "utf8")).digest("hex").slice(0, 32);
+}
+
 async function applySchema(pool: Pool): Promise<void> {
   let sql: string;
   if (fs.existsSync(SCHEMA_PATH)) {
@@ -57,6 +90,9 @@ async function applySchema(pool: Pool): Promise<void> {
     // Bundled deployments may not ship the file; rely on pre-applied schema.
     return;
   }
+  const fingerprint = schemaFingerprint();
+
+  if (await schemaIsCurrent(pool, fingerprint)) return;
 
   // Serialise DDL across every process that shares this database.
   //
@@ -72,11 +108,24 @@ async function applySchema(pool: Pool): Promise<void> {
   // an intermittent 404 on a route that exists and works locally. A session
   // advisory lock makes one process apply the schema while the others wait, and
   // makes the losers no-ops rather than casualties.
+  //
+  // The losers re-check the fingerprint *inside* the lock, so they skip the work
+  // rather than repeating it.
   const client = await pool.connect();
   try {
     await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK_KEY]);
     try {
+      const r = await client.query<{ v: string }>(
+        "SELECT value FROM settings WHERE key = 'schema_fingerprint'"
+      );
+      if (r.rows[0]?.v === fingerprint) return;
+
       await client.query(sql);
+      await client.query(
+        "INSERT INTO settings (key, value) VALUES ('schema_fingerprint', $1) " +
+          "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [fingerprint]
+      );
     } finally {
       await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK_KEY]).catch(() => undefined);
     }
