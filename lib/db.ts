@@ -10,6 +10,11 @@ import { dataDir } from "./paths";
 
 const SCHEMA_PATH = path.join(process.cwd(), "lib", "schema.sql");
 
+// Arbitrary but fixed key for the cross-process DDL lock. Any constant works; it
+// just has to be the same number in every process, and not collide with anything
+// else that takes advisory locks in this database.
+const SCHEMA_LOCK_KEY = 8_675_309;
+
 declare global {
   // eslint-disable-next-line no-var
   var __medimeshPool: Pool | undefined;
@@ -52,7 +57,32 @@ async function applySchema(pool: Pool): Promise<void> {
     // Bundled deployments may not ship the file; rely on pre-applied schema.
     return;
   }
-  await pool.query(sql);
+
+  // Serialise DDL across every process that shares this database.
+  //
+  // Locally there is one process, so this never mattered. On a serverless host
+  // each cold start runs this concurrently against the same database, and two
+  // `CREATE TABLE IF NOT EXISTS` passes racing each other deadlock outright:
+  //
+  //   Process A waits for ShareLock on transaction B;
+  //   process B waits for AccessExclusiveLock on pg_class;
+  //   error: deadlock detected  (40P01)
+  //
+  // The failing request is whichever instance lost the race, so this showed up as
+  // an intermittent 404 on a route that exists and works locally. A session
+  // advisory lock makes one process apply the schema while the others wait, and
+  // makes the losers no-ops rather than casualties.
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [SCHEMA_LOCK_KEY]);
+    try {
+      await client.query(sql);
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1)", [SCHEMA_LOCK_KEY]).catch(() => undefined);
+    }
+  } finally {
+    client.release();
+  }
 }
 
 // Ensures the pool exists and the schema has been applied, WITHOUT seeding.

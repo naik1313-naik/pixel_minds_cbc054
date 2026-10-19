@@ -4,7 +4,7 @@ import { clientIp, error, json, sameOrigin } from "@/lib/api-utils";
 import { createSession } from "@/lib/auth";
 import { setSessionCookie } from "@/lib/session";
 import { recordAudit } from "@/lib/audit";
-import { isDemoMode } from "@/lib/demo";
+import { isDemoLoginAllowedInProd, isDemoMode } from "@/lib/demo";
 import { DemoLoginError, findDemoUser, listAvailableDemoAccounts } from "@/lib/demo-accounts";
 
 export const runtime = "nodejs";
@@ -19,7 +19,7 @@ const loginSchema = z.object({ key: z.string().min(2).max(40) });
  * courtesy, not the security boundary.
  */
 export async function GET() {
-  if (!isDemoMode()) return json({ enabled: false, accounts: [] });
+  if (!isDemoLoginAllowedInProd()) return json({ enabled: false, accounts: [] });
   const accounts = await listAvailableDemoAccounts();
   return json({ enabled: true, accounts });
 }
@@ -33,7 +33,7 @@ export async function GET() {
  * cleaner than reality.
  */
 export async function POST(req: NextRequest) {
-  if (!isDemoMode()) return error(404, "Not found");
+  if (!isDemoLoginAllowedInProd()) return error(404, "Not found");
   if (!sameOrigin(req)) return error(403, "Cross-origin request blocked");
 
   const body = await req.json().catch(() => null);
@@ -61,7 +61,12 @@ export async function POST(req: NextRequest) {
     entityType: "user",
     entityId: user.id,
     ip,
-    meta: { key: parsed.data.key },
+    // Recorded because a demo sign-in skips the password *and* the second factor.
+    // On a public deployment that is worth being able to see afterwards.
+    meta: {
+      key: parsed.data.key,
+      publicDemo: !isDemoMode(),
+    },
   });
   return NextResponse.json({ ok: true, role: user.role, name: user.name });
 }

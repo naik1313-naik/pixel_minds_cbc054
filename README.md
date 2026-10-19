@@ -317,6 +317,32 @@ Three things keep this from being a hole:
 If the database has not been seeded yet, the buttons simply do not appear rather than failing on
 click.
 
+### Running it as a public demo URL
+
+A deployed link with nothing behind it is not much of a demo, so there is a narrow, explicit
+opt-in for **one-tap sign-in only** on a public deployment:
+
+```bash
+MM_DEMO_LOGIN_PROD=1
+MM_ALLOW_DEMO_LOGIN_IN_PROD=I_UNDERSTAND_THIS_IS_PUBLIC
+```
+
+Both are required, and the second has to be that exact string. One variable alone does nothing,
+and an approximate value like `yes` or `true` does nothing — which is deliberate: the cost of
+this switch is that anyone with the URL can sign in as any seeded persona, skipping the password
+*and* the second factor, so it should take a deliberate two-key action to arm rather than a stray
+env var.
+
+It is a separate switch from `DEMO_MODE` on purpose. Setting `DEMO_MODE=1` in production to get
+the sign-in buttons would also switch on every other demo affordance — revealed OTPs, SMS printed
+to the server log, skipped 2FA. None of those are needed to demo the product, and none of them
+should be one env var away from being public. `isDemoLoginAllowedInProd()` gates only the sign-in.
+
+**What this means, plainly:** with those two variables set, the deployment is a public demo. The
+audit log records each bypass with `publicDemo: true`. Put only seeded demo data in it — no real
+customers, no real prescriptions, no real payouts. Anyone can also reset it by clearing the
+variables and redeploying, and it is off by default everywhere else.
+
 ```bash
 npm run db:migrate      # apply schema changes without restarting the dev server
 npm run smoke:payments  # walk the whole demo flow end to end against a running server

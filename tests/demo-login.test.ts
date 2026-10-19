@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetDemo, queryOne } from "@/lib/db";
-import { isDemoMode } from "@/lib/demo";
+import { isDemoMode, isDemoLoginAllowedInProd } from "@/lib/demo";
 import { DEMO_ACCOUNTS, findDemoUser, isDemoEmail, listAvailableDemoAccounts, DemoLoginError } from "@/lib/demo-accounts";
 
 describe("demo mode switch", () => {
@@ -23,6 +23,70 @@ describe("demo mode switch", () => {
       env.NODE_ENV = previous;
       env.DEMO_MODE = previousDemo;
     }
+  });
+});
+
+describe("public demo login on a deployed environment", () => {
+  // One-click sign-in in production skips the password and the second factor.
+  // Arming it therefore needs two independent env vars, so a stray one cannot
+  // expose every seeded account on a public URL, and it stays a separate switch
+  // from isDemoMode (which also gates revealed OTPs and logged SMS).
+  const env = process.env as Record<string, string | undefined>;
+  let nodeEnv: string | undefined;
+  let loginProd: string | undefined;
+  let allow: string | undefined;
+
+  beforeEach(() => {
+    nodeEnv = env.NODE_ENV;
+    loginProd = env.MM_DEMO_LOGIN_PROD;
+    allow = env.MM_ALLOW_DEMO_LOGIN_IN_PROD;
+    env.NODE_ENV = "production";
+  });
+
+  afterEach(() => {
+    env.NODE_ENV = nodeEnv;
+    env.MM_DEMO_LOGIN_PROD = loginProd;
+    env.MM_ALLOW_DEMO_LOGIN_IN_PROD = allow;
+  });
+
+  it("is off in production by default", () => {
+    delete env.MM_DEMO_LOGIN_PROD;
+    delete env.MM_ALLOW_DEMO_LOGIN_IN_PROD;
+    expect(isDemoLoginAllowedInProd()).toBe(false);
+  });
+
+  it("stays off with only the first var set, without the acknowledgement", () => {
+    env.MM_DEMO_LOGIN_PROD = "1";
+    delete env.MM_ALLOW_DEMO_LOGIN_IN_PROD;
+    expect(isDemoLoginAllowedInProd()).toBe(false);
+
+    // Right variable, wrong value — an approximate confirmation is not a
+    // confirmation.
+    env.MM_ALLOW_DEMO_LOGIN_IN_PROD = "yes";
+    expect(isDemoLoginAllowedInProd()).toBe(false);
+    env.MM_ALLOW_DEMO_LOGIN_IN_PROD = "true";
+    expect(isDemoLoginAllowedInProd()).toBe(false);
+  });
+
+  it("arms only when both vars are set explicitly", () => {
+    env.MM_DEMO_LOGIN_PROD = "1";
+    env.MM_ALLOW_DEMO_LOGIN_IN_PROD = "I_UNDERSTAND_THIS_IS_PUBLIC";
+    expect(isDemoLoginAllowedInProd()).toBe(true);
+  });
+
+  it("does not switch on the wider demo affordances", () => {
+    env.MM_DEMO_LOGIN_PROD = "1";
+    env.MM_ALLOW_DEMO_LOGIN_IN_PROD = "I_UNDERSTAND_THIS_IS_PUBLIC";
+    expect(isDemoLoginAllowedInProd()).toBe(true);
+    // Revealed OTPs and logged SMS must stay off in production even then.
+    expect(isDemoMode()).toBe(false);
+  });
+
+  it("is on without any of the vars for a local run", () => {
+    env.NODE_ENV = "development";
+    delete env.MM_DEMO_LOGIN_PROD;
+    delete env.MM_ALLOW_DEMO_LOGIN_IN_PROD;
+    expect(isDemoLoginAllowedInProd()).toBe(true);
   });
 });
 
