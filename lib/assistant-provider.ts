@@ -194,3 +194,78 @@ export async function rephraseWithProvider(
     clearTimeout(timer);
   }
 }
+
+/**
+ * General health information via provider.
+ *
+ * Strict safety: only general info. Never diagnose, never name a medicine for
+ * treatment, never give a dose or duration, never say something is harmless,
+ * never tell someone to stop a medicine. Always ends with a referral to a
+ * doctor or pharmacist. Emergency instructions are limited to calling 112.
+ */
+export async function answerHealthQuestionWithProvider(
+  question: string,
+  history: string[] = []
+): Promise<ProviderResult> {
+  const config = providerConfig();
+  if (!config) return { text: null, used: false, fallbackReason: "not configured" };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const res = await fetch(config.url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: 700,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a general health information assistant for MediMesh, an Indian pharmacy app. " +
+              "You may explain symptoms, conditions, and general wellness in simple words. " +
+              "You are NOT a doctor. Never diagnose, never name a specific medicine for treatment, " +
+              "never give a dose or duration, never say something is harmless, never tell someone to stop a medicine, " +
+              "and never give emergency instructions beyond calling 112. " +
+              "If this sounds like an emergency, tell them to call 112 immediately. " +
+              "Always end by advising them to consult a qualified doctor or pharmacist. " +
+              "Keep answers short and in English or Hinglish.",
+          },
+          ...history.map((h, i) => ({
+            role: i % 2 === 0 ? "user" : "assistant",
+            content: h,
+          })),
+          { role: "user", content: question },
+        ],
+      }),
+    });
+    if (!res.ok) return { text: null, used: false, fallbackReason: `provider returned ${res.status}` };
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+      content?: string;
+    };
+    const text = json.choices?.[0]?.message?.content ?? json.content ?? "";
+    if (!text || text.trim().length < 2) return { text: null, used: false, fallbackReason: "empty response" };
+
+    const check = validateProviderOutput(text);
+    if (!check.ok) return { text: null, used: false, fallbackReason: `rejected: ${check.reason}` };
+
+    // Every health answer must tell the user to consult a professional.
+    if (!/consult|doctor|pharmacist|112/i.test(text)) {
+      return { text: null, used: false, fallbackReason: "missing referral" };
+    }
+
+    return { text, used: true };
+  } catch (e) {
+    const reason = e instanceof Error && e.name === "AbortError" ? "provider timed out" : "provider unreachable";
+    return { text: null, used: false, fallbackReason: reason };
+  } finally {
+    clearTimeout(timer);
+  }
+}

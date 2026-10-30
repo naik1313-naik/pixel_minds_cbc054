@@ -21,7 +21,7 @@ import { queryOne, queryAll } from "./db";
 import type { Medicine } from "./engine";
 import { triage, matchSymptom, screenForEmergency, EMERGENCY_NUMBER } from "./triage";
 import { scoreMedicine, type ScoredMedicine } from "./medicine-search";
-import { providerName, rephraseWithProvider } from "./assistant-provider";
+import { providerName, rephraseWithProvider, answerHealthQuestionWithProvider } from "./assistant-provider";
 
 export interface AssistantActor {
   userId: number;
@@ -294,6 +294,22 @@ export async function route(
     }
 
     if (result.responseType === "clarifying-question" || result.responseType === "insufficient-information") {
+      // If an AI provider is configured, try to answer the health question
+      // in general terms instead of hitting a dead end.
+      if (providerName()) {
+        const ai = await answerHealthQuestionWithProvider(message, history);
+        if (ai.used && ai.text) {
+          return {
+            intent: result.symptom === "unknown" ? "medical_boundary" : "symptom",
+            responseType: "health-information",
+            message: ai.text,
+            answeredBy: "provider",
+            consultADoctor: true,
+            unsure: false,
+          };
+        }
+      }
+
       return local({
         intent: result.symptom === "unknown" ? "medical_boundary" : "symptom",
         responseType: result.symptom === "unknown" ? "health-information" : "clarifying-question",
